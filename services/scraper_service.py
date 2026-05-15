@@ -325,10 +325,12 @@ class ScraperService:
         # --- Compare against DB ---
         db_chapters = self.repository.get_novel_chapters(novel_id)
 
-        # Build a reverse lookup: url -> {id, order} for this novel's chapters
-        db_by_url: dict[str, dict] = {}
+        # Build a reverse lookup: url -> list of {id, order} for this novel's
+        # chapters. There may be duplicates (same URL or same order) from
+        # previous partial syncs.
+        db_by_url: dict[str, list[dict]] = {}
         for order, row in db_chapters.items():
-            db_by_url[row["url"]] = {"id": row["id"], "order": order}
+            db_by_url.setdefault(row["url"], []).append({"id": row["id"], "order": order})
 
         operations = []
         update_count = 0
@@ -341,24 +343,20 @@ class ScraperService:
                     ch_id = db_chapters[order]["id"]
                     new_url = src["url"]
 
-                    # Check if the new URL already exists as another row for
-                    # this novel (e.g. from a previous partial sync). If so,
-                    # delete the stale old row — the row with the correct URL
-                    # already exists and may have downloaded content.
+                    # If the new URL already exists as any other row for this
+                    # novel, delete the stale old row — the row with the
+                    # correct URL already exists (and may have content).
                     if new_url in db_by_url:
-                        existing = db_by_url[new_url]
-                        if existing["id"] != ch_id:
-                            logger.info(
-                                f"[refresh_urls] New URL for ch {order} already "
-                                f"exists as ch {existing['order']} — deleting "
-                                f"stale row {ch_id}"
-                            )
-                            operations.append((
-                                "DELETE FROM chapters WHERE id = ?",
-                                (ch_id,),
-                            ))
-                            delete_count += 1
-                            continue
+                        logger.info(
+                            f"[refresh_urls] New URL for ch {order} already "
+                            f"exists in DB — deleting stale row {ch_id}"
+                        )
+                        operations.append((
+                            "DELETE FROM chapters WHERE id = ?",
+                            (ch_id,),
+                        ))
+                        delete_count += 1
+                        continue
 
                     operations.append((
                         """UPDATE chapters
@@ -376,7 +374,7 @@ class ScraperService:
             else:
                 # Only insert if this URL doesn't already exist for the novel
                 if src["url"] in db_by_url:
-                    existing = db_by_url[src["url"]]
+                    existing = db_by_url[src["url"]][0]
                     logger.info(
                         f"[refresh_urls] Source ch {order} URL already exists "
                         f"as ch {existing['order']} — skipping insert"
