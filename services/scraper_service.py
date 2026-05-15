@@ -16,7 +16,13 @@ import time
 from bs4 import BeautifulSoup
 
 from adapters import get_adapter
-from core.config import FETCH_DELAY, FETCH_DELAY_JITTER, FETCH_MAX_RETRIES, TIMEOUT
+from core.config import (
+    FETCH_DELAY,
+    FETCH_DELAY_JITTER,
+    FETCH_MAX_RETRIES,
+    SITE_FETCH_EXTRA,
+    TIMEOUT,
+)
 from core.database import NovelRepository, NOVEL_STATUS_ABANDONED
 from core.network import NetworkClient
 from core.run_logger import RunLogger
@@ -580,7 +586,7 @@ class ScraperService:
                     except Exception as e:
                         error_msg = str(e)
                         if attempt <= FETCH_MAX_RETRIES:
-                            backoff = 5 if attempt == 1 else 15
+                            backoff = 3 if attempt == 1 else 8
                             logger.warning(
                                 f"[fetch_chapters] Retry {attempt} for '{title}' "
                                 f"url={url}: {error_msg} — waiting {backoff}s"
@@ -608,13 +614,23 @@ class ScraperService:
                         )
                         abandoned_novels.add(ch_novel_id)
 
-                # Jittered sleep between chapters — never a predictable fixed interval
+                # Jittered sleep between chapters — per-site delays.
+                # Each site gets a different extra delay based on how
+                # aggressive their Cloudflare protection is.
+                site_extra = 0.0
+                url_lower = url.lower()
+                for site_key, extra in SITE_FETCH_EXTRA.items():
+                    if site_key in url_lower:
+                        site_extra = random.uniform(0, extra)
+                        break
                 jittered_delay = random.uniform(
                     FETCH_DELAY, FETCH_DELAY + FETCH_DELAY_JITTER
-                )
+                ) + site_extra
                 if DEBUG:
                     logger.debug(
-                        f"[fetch_chapters] sleeping {jittered_delay:.1f}s before next"
+                        f"[fetch_chapters] sleeping {jittered_delay:.1f}s before next "
+                        f"(base={FETCH_DELAY}-{FETCH_DELAY + FETCH_DELAY_JITTER}s, "
+                        f"site_extra={site_extra:.1f}s)"
                     )
                 time.sleep(jittered_delay)
 
