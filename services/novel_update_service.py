@@ -113,6 +113,10 @@ class NovelUpdateService:
         Does NOT sleep at the start — the inter-novel delay is managed by the
         caller (sync_all) so it only fires on successful calls, not on errors.
 
+        For ScribbleHub novels, chapter URLs are refreshed before comparison
+        so that slug changes on the source don't cause false "new chapter"
+        detections or 404 errors on next fetch.
+
         Stubbed-novel protection: if the source returns 0 chapters, the DB is
         checked before any action is taken.
           - DB has chapters → novel was stubbed (chapters sold/removed by author).
@@ -125,10 +129,16 @@ class NovelUpdateService:
             url (str): Source URL of the novel's landing page.
 
         Called by: sync_all()
-        Depends on: ScraperService.scrape_novel(), NovelRepository
+        Depends on: ScraperService.scrape_novel(),
+                    ScraperService.refresh_chapter_urls_for_novel(),
+                    NovelRepository
         """
         if DEBUG:
             logger.debug(f"[sync_novel] novel_id={novel_id} url={url}")
+
+        # --- Refresh chapter URLs for ScribbleHub before comparing ---
+        if "scribblehub.com" in url:
+            self.scraper.refresh_chapter_urls_for_novel(novel_id)
 
         source_data = self.scraper.scrape_novel(url)
         if not source_data:

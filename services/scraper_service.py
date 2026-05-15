@@ -248,6 +248,127 @@ class ScraperService:
         self.populate_novel(data, metadata_only=True)
         return True
 
+    def refresh_chapter_urls_for_novel(self, novel_id: int) -> bool:
+        """
+        Re-scrapes a ScribbleHub novel's landing page and updates any changed
+        chapter URLs in the database before chapter content is fetched.
+
+        This should be called before fetch_chapters(novel_id=...) to ensure the
+        DB has current URLs. Without this, stale URLs (from ScribbleHub slug
+        changes) cause 404 errors during content download.
+
+        Algorithm:
+          1. Look up the novel's source_url from the DB.
+          2. Call scrape_novel(source_url) to get the current chapter list.
+          3. Compare source chapters (by order) against DB chapters.
+          4. For any order where the URL changed: UPDATE the row in-place
+             (preserving content, hash, and metadata).
+          5. For any new orders: INSERT as PENDING.
+          6. Execute all changes in a single transaction.
+
+        Parameters:
+            novel_id (int): DB id of the novel to refresh.
+
+        Returns:
+            bool: True if refresh succeeded (or no changes needed), False on error.
+
+        Called by: fetch_chapters(), sync_novels.py, backfill_chapters.py
+        Depends on: scrape_novel(), NovelRepository.get_novel_chapters(),
+                    DatabaseManager.execute_transaction()
+        """
+        # --- Look up the novel ---
+        novel_row = self.repository.get_novel_by_id(novel_id)
+        if not novel_row:
+            logger.warning(
+                f"[refresh_urls] Novel {novel_id} not found in DB — skipping"
+            )
+            return False
+
+        source_url = novel_row["source_url"]
+        title = novel_row["title"]
+        if not source_url:
+            logger.warning(
+                f"[refresh_urls] No source_url for novel {novel_id} ('{title}') — skipping"
+            )
+            return False
+
+        # Only run for ScribbleHub novels (other sites don't change slugs)
+        if "scribblehub.com" not in source_url:
+            if DEBUG:
+                logger.debug(
+                    f"[refresh_urls] Not a ScribbleHub novel ('{title}'), skipping"
+                )
+            return True
+
+        logger.info(f"[refresh_urls] Refreshing chapter URLs for '{title}' (id={novel_id})")
+
+        # --- Scrape current chapter list ---
+        try:
+            data = self.scrape_novel(source_url)
+        except Exception as e:
+            logger.error(f"[refresh_urls] scrape_novel() raised for '{title}': {e}")
+            return False
+
+        if not data:
+            logger.warning(f"[refresh_urls] scrape_novel() returned no data for '{title}'")
+            return False
+
+        source_chapters = data.get("chapters", [])
+        if not source_chapters:
+            logger.info(f"[refresh_urls] Source has 0 chapters for '{title}' — nothing to refresh")
+            return True
+
+        source_by_order: dict[int, dict] = {}
+        for ch in source_chapters:
+            source_by_order[ch["order"]] = {"title": ch["title"], "url": ch["url"]}
+
+        # --- Compare against DB ---
+        db_chapters = self.repository.get_novel_chapters(novel_id)
+
+        operations = []
+        update_count = 0
+        insert_count = 0
+
+        for order, src in source_by_order.items():
+            if order in db_chapters:
+                if db_chapters[order]["url"] != src["url"]:
+                    ch_id = db_chapters[order]["id"]
+                    operations.append((
+                        """UPDATE chapters
+                           SET chapter_url = ?,
+                               chapter_title = ?,
+                               last_updated = CURRENT_TIMESTAMP
+                           WHERE id = ?""",
+                        (src["url"], src["title"], ch_id),
+                    ))
+                    update_count += 1
+                    logger.info(
+                        f"[refresh_urls] URL changed for '{title}' ch {order}: "
+                        f"{db_chapters[order]['url']} -> {src['url']}"
+                    )
+            else:
+                operations.append((
+                    """INSERT INTO chapters (novel_id, chapter_title, chapter_hash, chapter_order, chapter_url)
+                       VALUES (?, ?, ?, ?, ?)""",
+                    (novel_id, src["title"], "PENDING", order, src["url"]),
+                ))
+                insert_count += 1
+
+        if operations:
+            try:
+                self.repository.db.execute_transaction(operations)
+                logger.info(
+                    f"[refresh_urls] '{title}': {update_count} URL(s) updated, "
+                    f"{insert_count} new chapter(s) inserted"
+                )
+            except Exception as e:
+                logger.error(f"[refresh_urls] Transaction failed for '{title}': {e}")
+                return False
+        else:
+            logger.info(f"[refresh_urls] All URLs current for '{title}'")
+
+        return True
+
     def fetch_chapters(self, novel_id: int = None):
         """
         Downloads plain text + HTML content for all pending (unfetched) chapters.
@@ -275,6 +396,25 @@ class ScraperService:
             return
 
         logger.info(f"[fetch_chapters] Starting fetch for {len(tasks)} chapters...")
+
+        # --- Refresh chapter URLs for ScribbleHub novels before fetching ---
+        # If novel_id is set, re-scrape the novel's landing page first so that
+        # any changed ScribbleHub slugs are updated in the DB. This prevents
+        # 404 errors when downloading content with stale URLs.
+        if novel_id is not None:
+            logger.info(
+                f"[fetch_chapters] Refreshing chapter URLs for novel {novel_id}..."
+            )
+            self.refresh_chapter_urls_for_novel(novel_id)
+            # Re-fetch task list in case URLs changed (get_pending_chapters
+            # returns chapter rows that have no plain_content; URL changes
+            # via UPDATE don't affect this, but new inserts do)
+            tasks = self.repository.get_pending_chapters(novel_id)
+            if not tasks:
+                logger.info(
+                    "[fetch_chapters] All chapters up to date after URL refresh."
+                )
+                return
 
         with RunLogger(total_pending=len(tasks)) as log:
             for ch_id, title, url in tasks:
