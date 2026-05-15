@@ -44,14 +44,15 @@ def create_pure_schema():
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         novel_id INTEGER,
         chapter_title TEXT,
-        chapter_url TEXT UNIQUE,
+        chapter_url TEXT,
         chapter_hash TEXT NOT NULL,
         plain_content TEXT,
         html_content TEXT,
         created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
         last_updated DATETIME DEFAULT CURRENT_TIMESTAMP,
         chapter_order REAL,
-        FOREIGN KEY (novel_id) REFERENCES novels (id)
+        FOREIGN KEY (novel_id) REFERENCES novels (id),
+        UNIQUE (novel_id, chapter_order)
     )
     """)
 

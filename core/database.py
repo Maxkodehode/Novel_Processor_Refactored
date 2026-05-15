@@ -122,6 +122,14 @@ class NovelRepository:
         """
         Inserts or updates chapter rows for a novel.
 
+        Matches on (novel_id, chapter_order) — if a row already exists for
+        this chapter position, UPDATEs it in-place (preserving content/hash).
+        Only INSERTs if no row exists for that order.
+
+        This prevents duplicate rows when ScribbleHub changes a chapter's
+        URL slug: the old row gets its URL updated rather than a second row
+        being inserted.
+
         Parameters:
             novel_id (int): DB id of the novel.
             chapters (list[dict]): Chapter dicts with title, order, url keys.
@@ -134,9 +142,9 @@ class NovelRepository:
             query = """
                     INSERT INTO chapters (novel_id, chapter_title, chapter_hash, chapter_order, chapter_url)
                     VALUES (?, ?, ?, ?, ?)
-                    ON CONFLICT(chapter_url) DO UPDATE SET
-                                                           chapter_title = excluded.chapter_title,
-                                                           chapter_order = excluded.chapter_order \
+                    ON CONFLICT(novel_id, chapter_order) DO UPDATE SET
+                        chapter_url = excluded.chapter_url,
+                        chapter_title = excluded.chapter_title
                     """
             params = (novel_id, ch["title"], "PENDING", ch["order"], ch["url"])
             operations.append((query, params))
