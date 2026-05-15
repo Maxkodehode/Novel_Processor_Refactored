@@ -585,6 +585,21 @@ class ScraperService:
 
                     except Exception as e:
                         error_msg = str(e)
+                        # Early-abandon: on first 404, check if novel source is gone.
+                        # This avoids burning retries on every chapter of a dead novel.
+                        if "404" in error_msg and attempt == 1 and ch_novel_id is not None:
+                            if self._is_novel_gone(ch_novel_id):
+                                logger.warning(
+                                    f"[fetch_chapters] Novel {ch_novel_id} source 404 "
+                                    f"on first attempt for '{title}' — marking ABANDONED"
+                                )
+                                self.repository.set_novel_status(
+                                    ch_novel_id, NOVEL_STATUS_ABANDONED
+                                )
+                                abandoned_novels.add(ch_novel_id)
+                                log.fail(ch_id, title, "Novel abandoned (source 404)")
+                                break  # skip remaining retries for this chapter
+
                         if attempt <= FETCH_MAX_RETRIES:
                             backoff = 3 if attempt == 1 else 8
                             logger.warning(
@@ -600,10 +615,11 @@ class ScraperService:
                             )
                             log.fail(ch_id, title, error_msg)
 
-                # If all retries failed with 404, check if the novel's source
-                # page is also gone. If so, abandon the novel entirely.
+                # Post-retry abandon check (catches cases where first attempt
+                # didn't 404 but subsequent retries did, or non-404 failures
+                # that still indicate a dead novel).
                 if not success and "404" in error_msg and ch_novel_id is not None:
-                    if self._is_novel_gone(ch_novel_id):
+                    if ch_novel_id not in abandoned_novels and self._is_novel_gone(ch_novel_id):
                         logger.warning(
                             f"[fetch_chapters] Novel {ch_novel_id} source page is "
                             f"404 — marking ABANDONED and skipping all remaining "
@@ -657,13 +673,19 @@ class ScraperService:
             if not rows or not rows[0][0]:
                 return False
             source_url = rows[0][0]
-            resp = self.network.get(source_url, timeout=15)
-            if resp.status_code == 404:
-                logger.info(
-                    f"[novel_gone] Source URL 404 for novel {novel_id}: {source_url}"
-                )
-                return True
-            return False
+            try:
+                resp = self.network.get(source_url, timeout=15)
+                return resp.status_code == 404
+            except Exception as e:
+                # NetworkClient.get() raises on 404 via raise_for_status()
+                if "404" in str(e):
+                    logger.info(
+                        f"[novel_gone] Source URL 404 for novel {novel_id}: {source_url}"
+                    )
+                    return True
+                # Other network errors — don't assume the novel is gone
+                logger.debug(f"[novel_gone] Network error for novel {novel_id}: {e}")
+                return False
         except Exception as e:
             logger.debug(f"[novel_gone] Error checking novel {novel_id}: {e}")
             return False
