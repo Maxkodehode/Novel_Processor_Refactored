@@ -167,6 +167,11 @@ def refresh_novel(
     db_chapters = repo.get_novel_chapters(novel_id)
     # db_chapters: {order: {"url": str, "id": int}}
 
+    # Build reverse lookup: url -> {id, order} for collision detection
+    db_by_url: dict[str, dict] = {}
+    for order, row in db_chapters.items():
+        db_by_url[row["url"]] = {"id": row["id"], "order": order}
+
     # --- Step 3: Compare ---
     updates = []   # (chapter_id, new_url, new_title)
     inserts = []   # (order, title, url)
@@ -175,11 +180,21 @@ def refresh_novel(
     for order, src in source_by_order.items():
         if order in db_chapters:
             if db_chapters[order]["url"] != src["url"]:
-                updates.append((db_chapters[order]["id"], src["url"], src["title"]))
+                new_url = src["url"]
+                ch_id = db_chapters[order]["id"]
+                # If the new URL already exists as another row for this novel,
+                # delete the stale old row instead of updating (the row with
+                # the correct URL already exists and may have content).
+                if new_url in db_by_url and db_by_url[new_url]["id"] != ch_id:
+                    deletes.append((ch_id, order))
+                else:
+                    updates.append((ch_id, new_url, src["title"]))
             else:
                 result["unchanged"] += 1
         else:
-            inserts.append((order, src["title"], src["url"]))
+            # Only insert if this URL doesn't already exist for the novel
+            if src["url"] not in db_by_url:
+                inserts.append((order, src["title"], src["url"]))
 
     for order, db_row in db_chapters.items():
         if order not in source_by_order:
