@@ -1,0 +1,160 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Novel Reader</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+<div id="app">
+    <!-- Views -->
+    <div id="library-view" class="view">
+        <header>
+            <h1>My Library</h1>
+            <div class="header-actions">
+                <input type="text" id="library-search" placeholder="Filter current list...">
+                <select id="sort-select">
+                    <option value="title">Title (A-Z)</option>
+                    <option value="last_updated">Recently Updated</option>
+                    <option value="chapter_count">Chapter Count</option>
+                    <option value="word_count">Word Count</option>
+                </select>
+                <button id="search-toggle-btn">Search (Ctrl+K)</button>
+            </div>
+        </header>
+
+        <!-- Tag panel header and container are built entirely by renderTagFilters() in app.js -->
+        <section id="tag-filter-section" class="tag-filter-section"></section>
+
+        <div id="novel-grid" class="novel-grid"></div>
+    </div>
+
+    <div id="novel-view" class="view hidden">
+        <header>
+            <button class="back-btn" data-target="LIBRARY">← Back to Library</button>
+        </header>
+        <div id="novel-details" class="novel-details">
+            <!-- Populated by JS -->
+        </div>
+        <div class="chapter-list-container">
+            <h3>Chapters</h3>
+            <ul id="chapter-list" class="chapter-list"></ul>
+        </div>
+    </div>
+
+    <div id="reader-view" class="view hidden">
+        <div id="reader-top-bar" class="reader-bar top">
+            <div class="left">
+                <button class="back-btn" data-target="LIBRARY">← Library</button>
+            </div>
+            <div id="reader-title" class="center">Title > Chapter</div>
+            <div class="right">
+                <button id="prev-ch-btn-top" title="Previous Chapter">⬅</button>
+                <button id="next-ch-btn-top" title="Next Chapter">➡</button>
+                <button id="bookmark-btn" title="Toggle Bookmark">🔖</button>
+                <button id="notes-btn" title="Toggle Notes">📝</button>
+                <button id="settings-btn" title="Settings">⚙</button>
+            </div>
+        </div>
+
+        <main id="reading-column">
+            <article id="chapter-content">
+                <!-- Chapter content injected here -->
+            </article>
+        </main>
+
+        <div id="reader-bottom-bar" class="reader-bar bottom">
+            <button id="prev-ch-btn-bottom">⬅ Prev Chapter</button>
+            <div id="reader-progress-info">
+                <span id="chapter-index-info">Chapter X of Y</span>
+                <div class="progress-container">
+                    <div id="reader-progress-bar" class="progress-bar"></div>
+                </div>
+            </div>
+            <button id="next-ch-btn-bottom">Next Chapter ➡</button>
+        </div>
+    </div>
+
+    <!-- Overlays -->
+    <div id="search-modal" class="modal hidden">
+        <div class="modal-content">
+            <input type="text" id="global-search-input" placeholder="Search for novels or chapters..." autofocus>
+            <div id="search-results">
+                <section>
+                    <h4>Novels</h4>
+                    <div id="novel-results"></div>
+                </section>
+                <section>
+                    <h4>Chapters</h4>
+                    <div id="chapter-results"></div>
+                </section>
+            </div>
+        </div>
+    </div>
+
+    <div id="settings-panel" class="side-panel right hidden">
+        <div class="panel-header">
+            <h3>Settings</h3>
+            <button id="close-settings-btn" class="close-btn">&times;</button>
+        </div>
+        <div class="setting-group">
+            <label>Theme</label>
+            <div class="theme-presets">
+                <button data-theme="light">Light</button>
+                <button data-theme="sepia">Sepia</button>
+                <button data-theme="dark">Dark</button>
+                <button data-theme="amoled">AMOLED</button>
+            </div>
+        </div>
+        <div class="setting-group">
+            <label>Custom Colors</label>
+            <div class="color-inputs">
+                <span>BG: <input type="color" id="bg-color-picker"></span>
+                <span>Text: <input type="color" id="text-color-picker"></span>
+            </div>
+        </div>
+        <div class="setting-group">
+            <label>Font Family</label>
+            <select id="font-family-select">
+                <option value="Georgia, serif">Georgia</option>
+                <option value="'Palatino Linotype', 'Book Antiqua', Palatino, serif">Palatino</option>
+                <option value="'Merriweather', serif">Merriweather</option>
+                <option value="'Open Sans', sans-serif">Open Sans</option>
+                <option value="system-ui, sans-serif">System UI</option>
+            </select>
+        </div>
+        <div class="setting-group">
+            <label>Font Size: <span id="font-size-label">18px</span></label>
+            <input type="range" id="font-size-range" min="12" max="28" step="1">
+        </div>
+        <div class="setting-group">
+            <label>Line Height: <span id="line-height-label">1.6</span></label>
+            <input type="range" id="line-height-range" min="1.2" max="2.2" step="0.1">
+        </div>
+        <div class="setting-group">
+            <label>Paragraph Spacing: <span id="para-spacing-label">1.0em</span></label>
+            <input type="range" id="para-spacing-range" min="0" max="2" step="0.1">
+        </div>
+        <div class="setting-group">
+            <label>Column Width: <span id="column-width-label">70ch</span></label>
+            <input type="range" id="column-width-range" min="40" max="120" step="5">
+        </div>
+        <button id="reset-settings-btn">Reset to Defaults</button>
+    </div>
+
+    <div id="bookmarks-panel" class="side-panel left hidden">
+        <h3>Bookmarks</h3>
+        <div id="bookmarks-list"></div>
+    </div>
+
+    <div id="notes-panel" class="side-panel right hidden">
+        <h3>Chapter Note</h3>
+        <textarea id="note-textarea" placeholder="Write your notes for this chapter..."></textarea>
+        <div class="status-info">Auto-saves on change</div>
+    </div>
+</div>
+
+<script type="module" src="app.js"></script>
+</body>
+</html>

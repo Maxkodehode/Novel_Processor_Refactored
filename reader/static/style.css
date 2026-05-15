@@ -1,0 +1,515 @@
+:root {
+    --bg-primary: #ffffff;
+    --bg-secondary: #f4f4f4;
+    --text-primary: #1a1a1a;
+    --text-secondary: #666666;
+    --accent: #007bff;
+    --font-family: Georgia, serif;
+    --font-size: 18px;
+    --line-height: 1.6;
+    --paragraph-spacing: 1.0em;
+    --reading-width: 70ch;
+    --content-width: 70ch;
+}
+
+[data-theme="light"] {
+    --bg-primary: #ffffff;
+    --bg-secondary: #f4f4f4;
+    --text-primary: #1a1a1a;
+    --text-secondary: #666666;
+    --accent: #007bff;
+}
+
+[data-theme="sepia"] {
+    --bg-primary: #f4ecd8;
+    --bg-secondary: #e8dfc8;
+    --text-primary: #5b4636;
+    --text-secondary: #8a735e;
+    --accent: #a0522d;
+}
+
+[data-theme="dark"] {
+    --bg-primary: #2d2d2d;
+    --bg-secondary: #3d3d3d;
+    --text-primary: #e0e0e0;
+    --text-secondary: #a0a0a0;
+    --accent: #4da3ff;
+}
+
+[data-theme="amoled"] {
+    --bg-primary: #000000;
+    --bg-secondary: #1a1a1a;
+    --text-primary: #ffffff;
+    --text-secondary: #888888;
+    --accent: #ffffff;
+}
+
+* {
+    box-sizing: border-box;
+}
+
+body {
+    margin: 0;
+    padding: 0;
+    background-color: var(--bg-primary);
+    color: var(--text-primary);
+    font-family: var(--font-family);
+    transition: background-color 0.3s, color 0.3s;
+}
+
+.view {
+    min-height: 100vh;
+    padding: 20px;
+}
+
+.hidden {
+    display: none !important;
+}
+
+header {
+    max-width: 1200px;
+    margin: 0 auto 30px;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+}
+
+.novel-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+    gap: 25px;
+    max-width: 1200px;
+    margin: 0 auto;
+}
+
+.novel-card {
+    background: var(--bg-secondary);
+    border-radius: 8px;
+    overflow: hidden;
+    cursor: pointer;
+    transition: transform 0.2s;
+    display: flex;
+    flex-direction: column;
+}
+
+.novel-card:hover {
+    transform: translateY(-5px);
+}
+
+.novel-card img {
+    width: 100%;
+    aspect-ratio: 2/3;
+    object-fit: cover;
+}
+
+.novel-card .placeholder-cover {
+    width: 100%;
+    aspect-ratio: 2/3;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: #ccc;
+    font-size: 3rem;
+    font-weight: bold;
+    color: #666;
+}
+
+.novel-card-info {
+    padding: 12px;
+}
+
+.novel-card h3 {
+    margin: 0 0 5px;
+    font-size: 1.1rem;
+}
+
+.novel-card p {
+    margin: 0;
+    font-size: 0.9rem;
+    color: var(--text-secondary);
+}
+
+.progress-bar-container {
+    height: 6px;
+    background: #ddd;
+    margin-top: 10px;
+    border-radius: 3px;
+    overflow: hidden;
+}
+
+.progress-bar-fill {
+    height: 100%;
+    background: var(--accent);
+}
+
+/* Novel Detail View */
+.novel-details {
+    max-width: 800px;
+    margin: 0 auto;
+    display: flex;
+    gap: 30px;
+}
+
+.novel-details img {
+    width: 250px;
+    border-radius: 8px;
+}
+
+.novel-info-text {
+    flex: 1;
+}
+
+.synopsis {
+    margin-top: 20px;
+    line-height: 1.5;
+}
+
+.tags {
+    margin-top: 15px;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+}
+
+.tag {
+    background: var(--bg-secondary);
+    padding: 4px 10px;
+    border-radius: 4px;
+    font-size: 0.85rem;
+}
+
+.chapter-list-container {
+    max-width: 800px;
+    margin: 40px auto;
+}
+
+.chapter-list {
+    list-style: none;
+    padding: 0;
+}
+
+.chapter-item {
+    padding: 12px;
+    border-bottom: 1px solid var(--bg-secondary);
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+}
+
+.chapter-item:hover {
+    background: var(--bg-secondary);
+}
+
+.read-dot {
+    width: 8px;
+    height: 8px;
+    background: var(--accent);
+    border-radius: 50%;
+    margin-right: 12px;
+    opacity: 0;
+}
+
+.read-dot.visible {
+    opacity: 1;
+}
+
+/* ─── Reader View ────────────────────────────────────────────────────────── */
+#reader-view {
+    padding: 0;
+    display: flex;
+    flex-direction: column;
+}
+
+/*
+ * Reader bars are now static (in page flow) rather than fixed.
+ * They sit at the top and bottom of the page, not the viewport,
+ * so they don't obscure content while scrolling.
+ */
+.reader-bar {
+    position: static;
+    width: 100%;
+    background: var(--bg-secondary);
+    display: flex;
+    align-items: center;
+    padding: 0 20px;
+    z-index: 100;
+    border-color: rgba(0,0,0,0.1);
+    border-style: solid;
+}
+
+.reader-bar.top {
+    height: 50px;
+    justify-content: space-between;
+    border-bottom-width: 1px;
+}
+
+.reader-bar.bottom {
+    height: 60px;
+    justify-content: space-between;
+    border-top-width: 1px;
+    /* Push to end of flex column so it sits after all chapter sections */
+    margin-top: auto;
+}
+
+.reader-bar .center {
+    font-weight: bold;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    padding: 0 20px;
+}
+
+/*
+ * Reading column: no margin-top/bottom needed since bars are no longer fixed.
+ * Padding kept for comfortable line length.
+ */
+#reading-column {
+    max-width: var(--content-width);
+    width: 100%;
+    margin: 0 auto;
+    padding: 40px 20px;
+}
+
+/*
+ * Each chapter is its own section inside #reading-column.
+ * A visible divider separates chapters in infinite-scroll mode.
+ */
+.chapter-section {
+    margin-bottom: 60px;
+}
+
+.chapter-section + .chapter-section {
+    border-top: 2px solid var(--bg-secondary);
+    padding-top: 40px;
+}
+
+.chapter-section-title {
+    font-size: 1.4rem;
+    font-weight: bold;
+    margin-bottom: 24px;
+    color: var(--text-secondary);
+    text-align: center;
+}
+
+.chapter-section p {
+    margin-bottom: var(--paragraph-spacing);
+    font-size: var(--font-size);
+    line-height: var(--line-height);
+}
+
+/* Sentinel element used by IntersectionObserver to detect chapter boundaries */
+.chapter-sentinel {
+    height: 1px;
+    margin: 0;
+}
+
+/* ─── Panels ─────────────────────────────────────────────────────────────── */
+.side-panel {
+    position: fixed;
+    top: 0;
+    bottom: 0;
+    width: 350px;
+    background: var(--bg-secondary);
+    z-index: 500;
+    box-shadow: 0 0 15px rgba(0,0,0,0.2);
+    padding: 25px;
+    transition: transform 0.3s;
+}
+
+.panel-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 20px;
+}
+
+.panel-header h3 {
+    margin: 0;
+}
+
+.close-btn {
+    background: transparent;
+    border: none;
+    font-size: 1.5rem;
+    color: var(--text-secondary);
+    cursor: pointer;
+}
+
+.side-panel.right {
+    right: 0;
+}
+
+.side-panel.left {
+    left: 0;
+}
+
+.side-panel.hidden {
+    display: block !important;
+}
+
+.side-panel.right.hidden { transform: translateX(100%); }
+.side-panel.left.hidden { transform: translateX(-100%); }
+
+.setting-group {
+    margin-bottom: 20px;
+}
+
+.setting-group label {
+    display: block;
+    margin-bottom: 8px;
+    font-weight: bold;
+    font-size: 0.9rem;
+}
+
+.theme-presets {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 8px;
+}
+
+.theme-presets button {
+    padding: 8px;
+    cursor: pointer;
+}
+
+/* ─── Modals ─────────────────────────────────────────────────────────────── */
+.modal {
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    background: rgba(0,0,0,0.7);
+    z-index: 300;
+    display: flex;
+    justify-content: center;
+    padding-top: 10vh;
+}
+
+.modal-content {
+    background: var(--bg-primary);
+    width: 90%;
+    max-width: 600px;
+    height: 70vh;
+    border-radius: 8px;
+    padding: 20px;
+    display: flex;
+    flex-direction: column;
+}
+
+#global-search-input {
+    width: 100%;
+    padding: 12px;
+    font-size: 1.2rem;
+    border: 1px solid var(--bg-secondary);
+    border-radius: 4px;
+    background: var(--bg-secondary);
+    color: var(--text-primary);
+}
+
+#search-results {
+    overflow-y: auto;
+    margin-top: 20px;
+}
+
+#note-textarea {
+    width: 100%;
+    height: 300px;
+    background: var(--bg-primary);
+    color: var(--text-primary);
+    padding: 10px;
+    font-family: inherit;
+    font-size: 1rem;
+    border: 1px solid #ccc;
+    border-radius: 4px;
+    resize: none;
+}
+
+button {
+    background: var(--bg-secondary);
+    color: var(--text-primary);
+    border: 1px solid rgba(0,0,0,0.1);
+    padding: 8px 15px;
+    border-radius: 4px;
+    cursor: pointer;
+}
+
+button:hover {
+    background: #ddd;
+}
+
+.primary-btn {
+    background: var(--accent);
+    color: white;
+    border: none;
+    font-weight: bold;
+}
+
+/* ─── Tri-state Tag Filter ───────────────────────────────────────────────── */
+.tag-filter-section {
+    max-width: 1200px;
+    margin: 0 auto 20px;
+}
+
+.tag-filter-container {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    margin-top: 10px;
+}
+
+.filter-tag {
+    background: var(--bg-secondary);
+    padding: 5px 12px;
+    border-radius: 20px;
+    font-size: 0.85rem;
+    cursor: pointer;
+    user-select: none;
+    border: 1px solid rgba(0,0,0,0.1);
+    transition: all 0.2s;
+}
+
+.filter-tag.include {
+    background: #28a745;
+    color: white;
+    border-color: #218838;
+}
+
+.filter-tag.include::before { content: "+ "; }
+
+.filter-tag.exclude {
+    background: #dc3545;
+    color: white;
+    border-color: #c82333;
+}
+
+.filter-tag.exclude::before { content: "- "; }
+
+#sort-select {
+    padding: 8px;
+    border-radius: 4px;
+    background: var(--bg-secondary);
+    color: var(--text-primary);
+    border: 1px solid rgba(0,0,0,0.1);
+}
+
+.novel-actions {
+    margin-top: 20px;
+}
+
+.primary-btn:hover {
+    filter: brightness(1.1);
+}
+
+/* Progress bar at bottom of reader (inside bottom bar) */
+.progress-container {
+    flex: 1;
+    margin: 0 20px;
+}
+
+#reader-progress-bar {
+    height: 4px;
+    background: var(--accent);
+    border-radius: 2px;
+    transition: width 0.3s;
+}

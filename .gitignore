@@ -1,0 +1,39 @@
+# IDE (Rider/JetBrains)
+# Use the asterisk pattern to allow whitelisting inside the folder
+.idea/**/*
+!.idea/sqldialects.xml
+!.idea/dataSources.xml
+!.idea/misc.xml
+
+# Ensure sensitive or high-churn IDE clutter stays out
+.idea/workspace.xml
+.idea/dataSources.local.xml
+*.iml
+/shelf/
+/queries/
+/dataSources/
+
+# Python
+.venv/
+__pycache__/
+*.py[cod]
+
+# Scraper & Tooling
+scraper/
+temp_ng.zip
+*.zip
+
+# Data & Output
+*.db
+*.db-journal
+Novel_EPUB_Destination/*.epub
+!Novel_EPUB_Destination/.gitkeep
+covers/
+output.json
+logs/
+*.html
+!reader/static/index.html
+
+# Re-enforce XML ignore for non-IDE files if needed
+# Note: Since !.idea/sqldialects.xml is specific, it will override this
+*.xml
