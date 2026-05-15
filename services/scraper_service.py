@@ -17,7 +17,7 @@ from bs4 import BeautifulSoup
 
 from adapters import get_adapter
 from core.config import FETCH_DELAY, FETCH_DELAY_JITTER, FETCH_MAX_RETRIES, TIMEOUT
-from core.database import NovelRepository
+from core.database import NovelRepository, NOVEL_STATUS_ABANDONED
 from core.network import NetworkClient
 from core.run_logger import RunLogger
 from services import BrowserService, CoverManager
@@ -523,7 +523,18 @@ class ScraperService:
                 return
 
         with RunLogger(total_pending=len(tasks)) as log:
+            abandoned_novels: set[int] = set()
+
             for ch_id, title, url in tasks:
+                # Skip chapters from novels we've already determined are dead
+                ch_novel_id = self._get_chapter_novel_id(ch_id)
+                if ch_novel_id in abandoned_novels:
+                    logger.info(
+                        f"[fetch_chapters] Skipping '{title}' — novel {ch_novel_id} "
+                        f"marked ABANDONED (source gone)"
+                    )
+                    continue
+
                 start_time = time.time()
                 success = False
                 error_msg = ""
@@ -583,6 +594,20 @@ class ScraperService:
                             )
                             log.fail(ch_id, title, error_msg)
 
+                # If all retries failed with 404, check if the novel's source
+                # page is also gone. If so, abandon the novel entirely.
+                if not success and "404" in error_msg and ch_novel_id is not None:
+                    if self._is_novel_gone(ch_novel_id):
+                        logger.warning(
+                            f"[fetch_chapters] Novel {ch_novel_id} source page is "
+                            f"404 — marking ABANDONED and skipping all remaining "
+                            f"chapters for this novel"
+                        )
+                        self.repository.set_novel_status(
+                            ch_novel_id, NOVEL_STATUS_ABANDONED
+                        )
+                        abandoned_novels.add(ch_novel_id)
+
                 # Jittered sleep between chapters — never a predictable fixed interval
                 jittered_delay = random.uniform(
                     FETCH_DELAY, FETCH_DELAY + FETCH_DELAY_JITTER
@@ -592,3 +617,37 @@ class ScraperService:
                         f"[fetch_chapters] sleeping {jittered_delay:.1f}s before next"
                     )
                 time.sleep(jittered_delay)
+
+    def _get_chapter_novel_id(self, ch_id: int) -> int | None:
+        """Returns the novel_id for a chapter row, or None on error."""
+        try:
+            rows = self.repository.db.execute(
+                "SELECT novel_id FROM chapters WHERE id = ?", (ch_id,)
+            )
+            return rows[0][0] if rows else None
+        except Exception:
+            return None
+
+    def _is_novel_gone(self, novel_id: int) -> bool:
+        """
+        Checks whether a novel's source landing page returns 404.
+        Used to detect stubbed/removed novels so we can mark them ABANDONED
+        and skip all remaining chapter fetches.
+        """
+        try:
+            rows = self.repository.db.execute(
+                "SELECT source_url FROM novels WHERE id = ?", (novel_id,)
+            )
+            if not rows or not rows[0][0]:
+                return False
+            source_url = rows[0][0]
+            resp = self.network.get(source_url, timeout=15)
+            if resp.status_code == 404:
+                logger.info(
+                    f"[novel_gone] Source URL 404 for novel {novel_id}: {source_url}"
+                )
+                return True
+            return False
+        except Exception as e:
+            logger.debug(f"[novel_gone] Error checking novel {novel_id}: {e}")
+            return False
