@@ -12,8 +12,11 @@
 import os
 
 # Database
-# Force absolute path
-PROJECT_ROOT = os.environ.get("NOVEL_PROCESSOR_ROOT", "/workspace/Novel_Processor")
+# Resolve project root from the config file's location (works regardless of cwd or install path)
+PROJECT_ROOT = os.environ.get(
+    "NOVEL_PROCESSOR_ROOT",
+    os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+)
 DB_PATH = os.path.join(PROJECT_ROOT, "novels.db")
 
 # Network
