@@ -369,6 +369,67 @@ class ScraperService:
 
         return True
 
+    def refresh_all_chapter_urls(self) -> dict:
+        """
+        Refreshes chapter URLs for every ScribbleHub novel in the DB.
+
+        Used by the global backfill (fetch_chapters with no novel_id) to
+        ensure all pending chapters have current URLs before attempting to
+        download content. Without this, stale ScribbleHub slugs cause 404
+        errors that waste retries.
+
+        Returns:
+            dict: Summary with keys 'novels_processed', 'chapters_updated',
+                  'chapters_inserted', 'failed_novels'.
+
+        Called by: fetch_chapters(), backfill_chapters.py
+        Depends on: NovelRepository.db.execute(),
+                    refresh_chapter_urls_for_novel()
+        """
+        query = """
+            SELECT n.id, n.title
+            FROM novels n
+            WHERE n.source_url IS NOT NULL
+              AND n.status != 'ABANDONED'
+              AND n.source_url LIKE '%scribblehub.com%'
+            ORDER BY n.id ASC
+        """
+        rows = self.repository.db.execute(query)
+        summary = {
+            "novels_processed": 0,
+            "chapters_updated": 0,
+            "chapters_inserted": 0,
+            "failed_novels": 0,
+        }
+
+        logger.info(
+            f"[refresh_all_urls] Refreshing chapter URLs for {len(rows)} "
+            f"ScribbleHub novel(s)..."
+        )
+
+        for novel_id, title in rows:
+            logger.info(
+                f"[refresh_all_urls] [{summary['novels_processed'] + 1}/{len(rows)}] "
+                f"'{title}' (id={novel_id})"
+            )
+            try:
+                ok = self.refresh_chapter_urls_for_novel(novel_id)
+                if ok:
+                    summary["novels_processed"] += 1
+                else:
+                    summary["failed_novels"] += 1
+            except Exception as e:
+                logger.error(
+                    f"[refresh_all_urls] Unexpected error for '{title}': {e}"
+                )
+                summary["failed_novels"] += 1
+
+        logger.info(
+            f"[refresh_all_urls] Complete: {summary['novels_processed']} novels processed, "
+            f"{summary['failed_novels']} failed"
+        )
+        return summary
+
     def fetch_chapters(self, novel_id: int = None):
         """
         Downloads plain text + HTML content for all pending (unfetched) chapters.
@@ -398,17 +459,29 @@ class ScraperService:
         logger.info(f"[fetch_chapters] Starting fetch for {len(tasks)} chapters...")
 
         # --- Refresh chapter URLs for ScribbleHub novels before fetching ---
-        # If novel_id is set, re-scrape the novel's landing page first so that
-        # any changed ScribbleHub slugs are updated in the DB. This prevents
-        # 404 errors when downloading content with stale URLs.
+        # Per novel: re-scrape the novel's landing page so changed slugs are
+        # updated in the DB. Global mode: refresh ALL ScribbleHub novels first.
         if novel_id is not None:
             logger.info(
                 f"[fetch_chapters] Refreshing chapter URLs for novel {novel_id}..."
             )
             self.refresh_chapter_urls_for_novel(novel_id)
-            # Re-fetch task list in case URLs changed (get_pending_chapters
-            # returns chapter rows that have no plain_content; URL changes
-            # via UPDATE don't affect this, but new inserts do)
+            # Re-fetch task list in case new chapters were inserted
+            tasks = self.repository.get_pending_chapters(novel_id)
+            if not tasks:
+                logger.info(
+                    "[fetch_chapters] All chapters up to date after URL refresh."
+                )
+                return
+        else:
+            # Global backfill: refresh URLs for every ScribbleHub novel first
+            # so we don't waste retries on stale 404 slugs.
+            logger.info(
+                "[fetch_chapters] Global backfill — refreshing all ScribbleHub "
+                "chapter URLs before fetching..."
+            )
+            self.refresh_all_chapter_urls()
+            # Re-fetch pending list in case inserts/deletes changed it
             tasks = self.repository.get_pending_chapters(novel_id)
             if not tasks:
                 logger.info(
