@@ -128,8 +128,16 @@
         <div class="setting-group">
             <label>Custom Colors</label>
             <div class="color-inputs">
-                <span>BG: <input type="color" id="bg-color-picker"></span>
-                <span>Text: <input type="color" id="text-color-picker"></span>
+                <div class="color-row">
+                    <label>BG:</label>
+                    <input type="text" id="bg-color-hex" class="color-hex-input" placeholder="#1a1a1a" maxlength="7">
+                    <input type="color" id="bg-color-picker">
+                </div>
+                <div class="color-row">
+                    <label>Text:</label>
+                    <input type="text" id="text-color-hex" class="color-hex-input" placeholder="#e0e0e0" maxlength="7">
+                    <input type="color" id="text-color-picker">
+                </div>
             </div>
         </div>
         <div class="setting-group">
@@ -144,7 +152,7 @@
         </div>
         <div class="setting-group">
             <label>Font Size: <span id="font-size-label">18px</span></label>
-            <input type="range" id="font-size-range" min="12" max="28" step="1">
+            <input type="range" id="font-size-range" min="12" max="48" step="1">
         </div>
         <div class="setting-group">
             <label>Line Height: <span id="line-height-label">1.6</span></label>

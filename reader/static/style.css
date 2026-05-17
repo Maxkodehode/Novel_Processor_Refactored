@@ -519,6 +519,48 @@ header {
     cursor: pointer;
 }
 
+.color-inputs {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+.color-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.color-row label {
+    font-size: 0.85rem;
+    font-weight: normal;
+    min-width: 30px;
+    margin: 0;
+}
+
+.color-hex-input {
+    flex: 1;
+    padding: 5px 8px;
+    font-size: 0.85rem;
+    font-family: monospace;
+    border: 1px solid rgba(0,0,0,0.15);
+    border-radius: 4px;
+    background: var(--bg-primary);
+    color: var(--text-primary);
+    text-transform: lowercase;
+}
+
+input[type="color"] {
+    width: 36px;
+    height: 28px;
+    padding: 0;
+    border: 1px solid rgba(0,0,0,0.15);
+    border-radius: 4px;
+    cursor: pointer;
+    background: none;
+    flex-shrink: 0;
+}
+
 /* ─── Modals (kept for backward compat, now unused) ─────────────────────── */
 .modal {
     position: fixed;

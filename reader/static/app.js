@@ -177,11 +177,15 @@ function applySettings() {
     if ($('column-width-range')) $('column-width-range').value = parseInt(s.columnWidth);
     if ($('bg-color-picker')) {
         const bg = getComputedStyle(root).getPropertyValue('--bg-primary').trim();
-        $('bg-color-picker').value = bg.startsWith('#') ? bg : rgbToHex(bg);
+        const bgHex = bg.startsWith('#') ? bg : rgbToHex(bg);
+        $('bg-color-picker').value = bgHex;
+        if ($('bg-color-hex')) $('bg-color-hex').value = bgHex;
     }
     if ($('text-color-picker')) {
         const txt = getComputedStyle(root).getPropertyValue('--text-primary').trim();
-        $('text-color-picker').value = txt.startsWith('#') ? txt : rgbToHex(txt);
+        const txtHex = txt.startsWith('#') ? txt : rgbToHex(txt);
+        $('text-color-picker').value = txtHex;
+        if ($('text-color-hex')) $('text-color-hex').value = txtHex;
     }
 }
 
@@ -874,8 +878,43 @@ document.querySelectorAll('.theme-presets button').forEach(btn => {
     };
 });
 
-$('bg-color-picker').oninput = (e) => { currentState.settings.customBg = e.target.value; saveSettings(); };
-$('text-color-picker').oninput = (e) => { currentState.settings.customText = e.target.value; saveSettings(); };
+// Color pickers: sync picker <-> hex input
+function syncColorToHex(pickerId, hexId) {
+    const picker = $(pickerId);
+    const hex = $(hexId);
+    if (picker && hex) hex.value = picker.value;
+}
+function syncHexToPicker(hexId, pickerId, settingKey) {
+    const hex = $(hexId);
+    const picker = $(pickerId);
+    if (!hex || !picker) return;
+    hex.value = hex.value.toLowerCase();
+    // Validate hex: must be # followed by 3 or 6 hex digits
+    if (/^#([0-9a-f]{3}|[0-9a-f]{6})$/.test(hex.value)) {
+        // Expand 3-digit hex to 6-digit for the color picker
+        if (hex.value.length === 4) {
+            const r = hex.value[1], g = hex.value[2], b = hex.value[3];
+            picker.value = '#' + r + r + g + g + b + b;
+        } else {
+            picker.value = hex.value;
+        }
+        currentState.settings[settingKey] = hex.value;
+        saveSettings();
+    }
+}
+
+$('bg-color-picker').oninput = (e) => {
+    currentState.settings.customBg = e.target.value;
+    saveSettings();
+    syncColorToHex('bg-color-picker', 'bg-color-hex');
+};
+$('text-color-picker').oninput = (e) => {
+    currentState.settings.customText = e.target.value;
+    saveSettings();
+    syncColorToHex('text-color-picker', 'text-color-hex');
+};
+$('bg-color-hex').oninput = (e) => { syncHexToPicker('bg-color-hex', 'bg-color-picker', 'customBg'); };
+$('text-color-hex').oninput = (e) => { syncHexToPicker('text-color-hex', 'text-color-picker', 'customText'); };
 $('font-family-select').onchange = (e) => { currentState.settings.fontFamily = e.target.value; saveSettings(); };
 $('font-size-range').oninput = (e) => { currentState.settings.fontSize = parseInt(e.target.value); saveSettings(); };
 $('line-height-range').oninput = (e) => { currentState.settings.lineHeight = parseFloat(e.target.value); saveSettings(); };
