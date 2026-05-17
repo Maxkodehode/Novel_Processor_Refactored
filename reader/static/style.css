@@ -10,6 +10,7 @@
     --paragraph-spacing: 1.0em;
     --reading-width: 70ch;
     --content-width: 70ch;
+    --sidebar-width: 300px;
 }
 
 [data-theme="light"] {
@@ -72,6 +73,27 @@ header {
     display: flex;
     justify-content: space-between;
     align-items: center;
+}
+
+.header-actions {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+}
+
+.icon-btn {
+    background: var(--bg-secondary);
+    color: var(--text-primary);
+    border: 1px solid rgba(0,0,0,0.1);
+    padding: 8px 12px;
+    border-radius: 4px;
+    cursor: pointer;
+    font-size: 0.9rem;
+    white-space: nowrap;
+}
+
+.icon-btn:hover {
+    background: #ddd;
 }
 
 .novel-grid {
@@ -140,6 +162,14 @@ header {
 .progress-bar-fill {
     height: 100%;
     background: var(--accent);
+}
+
+/* Library infinite scroll loader */
+.library-loader {
+    text-align: center;
+    padding: 20px;
+    color: var(--text-secondary);
+    font-size: 0.9rem;
 }
 
 /* Novel Detail View */
@@ -220,11 +250,6 @@ header {
     flex-direction: column;
 }
 
-/*
- * Reader bars are now static (in page flow) rather than fixed.
- * They sit at the top and bottom of the page, not the viewport,
- * so they don't obscure content while scrolling.
- */
 .reader-bar {
     position: static;
     width: 100%;
@@ -247,7 +272,6 @@ header {
     height: 60px;
     justify-content: space-between;
     border-top-width: 1px;
-    /* Push to end of flex column so it sits after all chapter sections */
     margin-top: auto;
 }
 
@@ -259,10 +283,6 @@ header {
     padding: 0 20px;
 }
 
-/*
- * Reading column: no margin-top/bottom needed since bars are no longer fixed.
- * Padding kept for comfortable line length.
- */
 #reading-column {
     max-width: var(--content-width);
     width: 100%;
@@ -270,10 +290,6 @@ header {
     padding: 40px 20px;
 }
 
-/*
- * Each chapter is its own section inside #reading-column.
- * A visible divider separates chapters in infinite-scroll mode.
- */
 .chapter-section {
     margin-bottom: 60px;
 }
@@ -297,30 +313,49 @@ header {
     line-height: var(--line-height);
 }
 
-/* Sentinel element used by IntersectionObserver to detect chapter boundaries */
 .chapter-sentinel {
     height: 1px;
     margin: 0;
 }
 
-/* ─── Panels ─────────────────────────────────────────────────────────────── */
+/* ─── Side Panels ────────────────────────────────────────────────────────── */
 .side-panel {
     position: fixed;
     top: 0;
     bottom: 0;
-    width: 350px;
+    width: var(--sidebar-width);
     background: var(--bg-secondary);
     z-index: 500;
     box-shadow: 0 0 15px rgba(0,0,0,0.2);
-    padding: 25px;
+    padding: 0;
     transition: transform 0.3s;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
 }
+
+.side-panel.right {
+    right: 0;
+}
+
+.side-panel.left {
+    left: 0;
+}
+
+.side-panel.hidden {
+    display: flex !important;
+}
+
+.side-panel.right.hidden { transform: translateX(100%); }
+.side-panel.left.hidden { transform: translateX(-100%); }
 
 .panel-header {
     display: flex;
     justify-content: space-between;
     align-items: center;
-    margin-bottom: 20px;
+    padding: 15px 20px;
+    border-bottom: 1px solid rgba(0,0,0,0.1);
+    flex-shrink: 0;
 }
 
 .panel-header h3 {
@@ -333,22 +368,134 @@ header {
     font-size: 1.5rem;
     color: var(--text-secondary);
     cursor: pointer;
+    padding: 0 5px;
 }
 
-.side-panel.right {
-    right: 0;
+.panel-search-input {
+    width: 100%;
+    padding: 10px 12px;
+    font-size: 0.95rem;
+    border: 1px solid rgba(0,0,0,0.15);
+    border-radius: 4px;
+    background: var(--bg-primary);
+    color: var(--text-primary);
+    flex-shrink: 0;
 }
 
-.side-panel.left {
-    left: 0;
+/* ─── Tag Panel ──────────────────────────────────────────────────────────── */
+.tag-panel-controls {
+    padding: 10px 15px;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    border-bottom: 1px solid rgba(0,0,0,0.1);
+    flex-shrink: 0;
 }
 
-.side-panel.hidden {
-    display: block !important;
+.tag-sort-btns {
+    display: flex;
+    gap: 5px;
 }
 
-.side-panel.right.hidden { transform: translateX(100%); }
-.side-panel.left.hidden { transform: translateX(-100%); }
+.tag-sort-btn {
+    flex: 1;
+    padding: 5px 10px;
+    font-size: 0.8rem;
+    border: 1px solid rgba(0,0,0,0.15);
+    border-radius: 4px;
+    background: var(--bg-primary);
+    color: var(--text-primary);
+    cursor: pointer;
+}
+
+.tag-sort-btn.active {
+    background: var(--accent);
+    color: white;
+    border-color: var(--accent);
+}
+
+#tag-filter-container {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    padding: 12px 15px;
+    overflow-y: auto;
+    flex: 1;
+    align-content: flex-start;
+}
+
+.filter-tag {
+    background: var(--bg-primary);
+    padding: 4px 10px;
+    border-radius: 20px;
+    font-size: 0.8rem;
+    cursor: pointer;
+    user-select: none;
+    border: 1px solid rgba(0,0,0,0.1);
+    transition: all 0.2s;
+}
+
+.filter-tag.include {
+    background: #28a745;
+    color: white;
+    border-color: #218838;
+}
+
+.filter-tag.include::before { content: "+ "; }
+
+.filter-tag.exclude {
+    background: #dc3545;
+    color: white;
+    border-color: #c82333;
+}
+
+.filter-tag.exclude::before { content: "- "; }
+
+/* ─── Search Panel ───────────────────────────────────────────────────────── */
+#search-panel .panel-search-input {
+    margin: 10px 15px;
+    width: calc(100% - 30px);
+}
+
+.search-panel-results {
+    overflow-y: auto;
+    flex: 1;
+    padding: 0 15px 15px;
+}
+
+.search-panel-results section {
+    margin-bottom: 15px;
+}
+
+.search-panel-results h4 {
+    margin: 10px 0 8px;
+    font-size: 0.85rem;
+    color: var(--text-secondary);
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+}
+
+.search-result-item {
+    padding: 8px 10px;
+    cursor: pointer;
+    border-radius: 4px;
+    font-size: 0.9rem;
+    border-bottom: 1px solid rgba(0,0,0,0.05);
+}
+
+.search-result-item:hover {
+    background: var(--bg-primary);
+}
+
+/* ─── Settings Panel ─────────────────────────────────────────────────────── */
+#settings-panel {
+    overflow-y: auto;
+}
+
+#settings-panel .setting-group,
+#settings-panel > button {
+    padding: 0 20px;
+}
 
 .setting-group {
     margin-bottom: 20px;
@@ -372,7 +519,7 @@ header {
     cursor: pointer;
 }
 
-/* ─── Modals ─────────────────────────────────────────────────────────────── */
+/* ─── Modals (kept for backward compat, now unused) ─────────────────────── */
 .modal {
     position: fixed;
     top: 0;
@@ -395,21 +542,6 @@ header {
     padding: 20px;
     display: flex;
     flex-direction: column;
-}
-
-#global-search-input {
-    width: 100%;
-    padding: 12px;
-    font-size: 1.2rem;
-    border: 1px solid var(--bg-secondary);
-    border-radius: 4px;
-    background: var(--bg-secondary);
-    color: var(--text-primary);
-}
-
-#search-results {
-    overflow-y: auto;
-    margin-top: 20px;
 }
 
 #note-textarea {
@@ -445,45 +577,9 @@ button:hover {
     font-weight: bold;
 }
 
-/* ─── Tri-state Tag Filter ───────────────────────────────────────────────── */
-.tag-filter-section {
-    max-width: 1200px;
-    margin: 0 auto 20px;
+.primary-btn:hover {
+    filter: brightness(1.1);
 }
-
-.tag-filter-container {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 8px;
-    margin-top: 10px;
-}
-
-.filter-tag {
-    background: var(--bg-secondary);
-    padding: 5px 12px;
-    border-radius: 20px;
-    font-size: 0.85rem;
-    cursor: pointer;
-    user-select: none;
-    border: 1px solid rgba(0,0,0,0.1);
-    transition: all 0.2s;
-}
-
-.filter-tag.include {
-    background: #28a745;
-    color: white;
-    border-color: #218838;
-}
-
-.filter-tag.include::before { content: "+ "; }
-
-.filter-tag.exclude {
-    background: #dc3545;
-    color: white;
-    border-color: #c82333;
-}
-
-.filter-tag.exclude::before { content: "- "; }
 
 #sort-select {
     padding: 8px;
@@ -493,12 +589,18 @@ button:hover {
     border: 1px solid rgba(0,0,0,0.1);
 }
 
-.novel-actions {
-    margin-top: 20px;
+#library-search {
+    padding: 8px 12px;
+    border-radius: 4px;
+    border: 1px solid rgba(0,0,0,0.15);
+    background: var(--bg-secondary);
+    color: var(--text-primary);
+    font-size: 0.9rem;
+    width: 200px;
 }
 
-.primary-btn:hover {
-    filter: brightness(1.1);
+.novel-actions {
+    margin-top: 20px;
 }
 
 /* Progress bar at bottom of reader (inside bottom bar) */

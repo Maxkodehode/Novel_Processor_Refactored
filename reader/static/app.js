@@ -1,20 +1,20 @@
 /**
  * app.js - Main state machine and UI logic
  *
- * CHANGES:
+ * CHANGES in this version:
+ *  - Tags moved to a left side panel with search, sort (count/alpha), and
+ *    expand/collapse via a header toggle button.
+ *  - Search converted from a modal to a left side panel with toggle button.
+ *  - Library uses infinite scroll: loads 50 novels at a time, appends next
+ *    batch when user scrolls near the bottom.
+ *  - "Filter current list..." input now filters the loaded novels client-side
+ *    by title/author in real time.
+ *  - Browser history (pushState/popstate) support: back/forward buttons work.
+ *    Each navigation (library, novel, reader) pushes a history state.
  *  - Reader: Replaced single-chapter view with infinite scroll. Chapters are
- *    rendered as stacked <section> elements inside #reading-column. A window
- *    of current ±2 chapters is kept mounted; chapters outside that range are
- *    unloaded (content cleared, placeholder height preserved) so memory stays
- *    bounded regardless of library size.
- *  - Reader: IntersectionObserver watches per-chapter sentinel elements to
- *    detect which chapter is currently in view. Progress saving, title bar,
- *    and bookmark/note state all update automatically as you scroll.
- *  - Reader: Top/bottom bars are now static (in page flow) so they no longer
- *    float over content. Prev/Next buttons in the top bar jump to the
- *    adjacent chapter by scrolling it into view (loading it if needed).
- *  - Reader: navigateTo(VIEWS.READER) now accepts a chapter id and builds the
- *    initial window around that chapter.
+ *    rendered as stacked <section> elements inside #reading-column.
+ *  - Reader: IntersectionObserver watches per-chapter sentinel elements.
+ *  - Reader: Top/bottom bars are static (in page flow).
  */
 
 const VIEWS = {
@@ -34,13 +34,13 @@ const DEFAULT_SETTINGS = {
     columnWidth: '70ch'
 };
 
-// How many chapters to keep loaded on each side of the current one
+const LIBRARY_PAGE_SIZE = 50;
 const CHAPTER_WINDOW = 2;
 
 let currentState = {
     view: VIEWS.LIBRARY,
     novel: null,
-    chapter: null,       // The chapter currently in the viewport
+    chapter: null,
     settings: { ...DEFAULT_SETTINGS },
     filter: {
         includeTags: [],
@@ -49,13 +49,24 @@ let currentState = {
     }
 };
 
-// Infinite scroll state
+// Infinite scroll state (reader)
 const infiniteScroll = {
-    chapterIds: [],          // Full ordered list of chapter ids for current novel
-    loadedIds: new Set(),    // Chapter ids currently mounted in DOM
-    observer: null,          // IntersectionObserver for sentinels
+    chapterIds: [],
+    loadedIds: new Set(),
+    observer: null,
     scrollSaveTimeout: null,
     lastScrollY: 0
+};
+
+// Library pagination state
+const libraryState = {
+    allNovels: [],          // All novels loaded so far
+    totalCount: 0,          // Total novels matching current filter
+    loadedCount: 0,         // How many we've loaded
+    isLoading: false,       // Fetch in progress
+    scrollObserver: null,   // IntersectionObserver for library
+    tagSearch: '',          // Current tag search filter
+    tagSortBy: 'count'      // 'count' or 'name'
 };
 
 // --- API Module ---
@@ -65,14 +76,16 @@ const api = {
         if (!resp.ok) throw new Error(`API Error: ${resp.status}`);
         return resp.json();
     },
-    getNovels: (params = {}) => {
+    getNovels: (params = {}, limit, offset) => {
         const query = new URLSearchParams();
         if (params.include_tags) params.include_tags.forEach(t => query.append('include_tags', t));
         if (params.exclude_tags) params.exclude_tags.forEach(t => query.append('exclude_tags', t));
         if (params.sort_by) query.append('sort_by', params.sort_by);
+        if (limit !== undefined) query.append('limit', limit);
+        if (offset !== undefined) query.append('offset', offset);
         return api.fetch(`/api/novels?${query.toString()}`);
     },
-    getTags: () => api.fetch('/api/tags'),
+    getTags: (sortBy = 'count') => api.fetch(`/api/tags?sort_by=${sortBy}`),
     getNovel: (id) => api.fetch(`/api/novels/${id}`),
     getChapter: (id) => api.fetch(`/api/chapters/${id}`),
     search: (q) => api.fetch(`/api/search?q=${encodeURIComponent(q)}`),
@@ -146,7 +159,6 @@ function applySettings() {
     root.style.setProperty('--paragraph-spacing', `${s.paragraphSpacing}em`);
     root.style.setProperty('--content-width', s.columnWidth);
 
-    // Update UI controls (guards for when reader panel isn't in DOM yet)
     if ($('font-size-label')) $('font-size-label').textContent = `${s.fontSize}px`;
     if ($('line-height-label')) $('line-height-label').textContent = s.lineHeight;
     if ($('para-spacing-label')) $('para-spacing-label').textContent = `${s.paragraphSpacing}em`;
@@ -160,96 +172,185 @@ function applySettings() {
     if ($('text-color-picker')) $('text-color-picker').value = getComputedStyle(root).getPropertyValue('--text-primary').trim();
 }
 
+// --- Browser History ---
+function pushHistory(state, title, url) {
+    history.pushState(state, title, url);
+}
+
+function initPopstateHandler() {
+    window.addEventListener('popstate', (e) => {
+        if (!e.state) {
+            // No state — go to library
+            navigateTo(VIEWS.LIBRARY, {}, false);
+            return;
+        }
+        const s = e.state;
+        if (s.view === VIEWS.LIBRARY) {
+            navigateTo(VIEWS.LIBRARY, {}, false);
+        } else if (s.view === VIEWS.NOVEL && s.novelId) {
+            navigateTo(VIEWS.NOVEL, { id: s.novelId }, false);
+        } else if (s.view === VIEWS.READER && s.chapterId) {
+            navigateTo(VIEWS.READER, { id: s.chapterId }, false);
+        }
+    });
+}
+
 // --- Navigation ---
-async function navigateTo(view, params = {}) {
+async function navigateTo(view, params = {}, push = true) {
     Object.values(VIEWS).forEach(v => hide($(v)));
     show($(view));
     currentState.view = view;
 
+    // Push browser history
+    if (push) {
+        if (view === VIEWS.LIBRARY) {
+            pushHistory({ view: VIEWS.LIBRARY }, 'Library', '#library');
+        } else if (view === VIEWS.NOVEL) {
+            pushHistory({ view: VIEWS.NOVEL, novelId: params.id }, 'Novel', `#novel/${params.id}`);
+        } else if (view === VIEWS.READER) {
+            pushHistory({ view: VIEWS.READER, chapterId: params.id }, 'Reader', `#reader/${params.id}`);
+        }
+    }
+
     if (view === VIEWS.LIBRARY) {
-        await renderLibrary();
+        await renderLibrary(true);
         window.scrollTo(0, 0);
     } else if (view === VIEWS.NOVEL) {
         await renderNovel(params.id);
         window.scrollTo(0, 0);
     } else if (view === VIEWS.READER) {
         await initReader(params.id);
-        // Don't scrollTo(0,0) here — initReader handles scroll restoration
     }
 }
 
 // --- Library View ---
-let allTags = [];
 
-async function renderLibrary() {
-    if (allTags.length === 0) {
-        allTags = await api.getTags();
-        renderTagFilters();
+async function renderLibrary(reset = false) {
+    // Reset pagination state if filters changed
+    if (reset) {
+        libraryState.allNovels = [];
+        libraryState.loadedCount = 0;
+        libraryState.isLoading = false;
+        libraryState.totalCount = 0;
     }
 
-    const novels = await api.getNovels({
-        include_tags: currentState.filter.includeTags,
-        exclude_tags: currentState.filter.excludeTags,
-        sort_by: currentState.filter.sortBy
-    });
+    // Load tags on first render
+    if (!libraryState.tagsLoaded) {
+        await loadTags();
+        libraryState.tagsLoaded = true;
+    }
 
-    const grid = $('novel-grid');
-    grid.innerHTML = '';
+    // Fetch first page
+    await loadMoreNovels();
 
-    novels.forEach(n => {
-        const card = document.createElement('div');
-        card.className = 'novel-card';
-        const progress = n.chapter_count > 0 ? (n.chapters_read / n.chapter_count) * 100 : 0;
-        const initials = n.title.split(' ').map(w => w[0]).join('').substring(0, 3).toUpperCase();
-
-        card.innerHTML = `
-            ${n.cover_path ? `<img src="/api/covers/${n.id}" onerror="this.style.display='none'; this.nextElementSibling.style.display='flex'">` : ''}
-            <div class="placeholder-cover" style="${n.cover_path ? 'display:none' : 'display:flex'}">${initials}</div>
-            <div class="novel-card-info">
-                <h3>${n.title}</h3>
-                <p>${n.author || 'Unknown Author'}</p>
-                <div class="progress-bar-container">
-                    <div class="progress-bar-fill" style="width: ${progress}%"></div>
-                </div>
-                <p style="font-size: 0.75rem; margin-top: 5px">${n.chapters_read} / ${n.chapter_count} read</p>
-            </div>
-        `;
-        card.onclick = () => navigateTo(VIEWS.NOVEL, { id: n.id });
-        grid.appendChild(card);
-    });
+    // Set up infinite scroll observer
+    setupLibraryInfiniteScroll();
 }
 
-function renderTagFilters() {
-    const section = $('tag-filter-section');
-    section.innerHTML = '';
+async function loadMoreNovels() {
+    if (libraryState.isLoading) return;
+    if (libraryState.loadedCount > 0 && libraryState.loadedCount >= libraryState.totalCount) return;
 
-    const header = document.createElement('div');
-    header.className = 'tag-panel-header';
-    header.style.cssText = 'cursor:pointer;margin-bottom:8px;font-weight:bold;display:flex;align-items:center;';
+    libraryState.isLoading = true;
+    const loader = $('library-loader');
+    if (loader) show(loader);
 
-    const title = document.createElement('h4');
-    title.id = 'tag-panel-title';
-    title.style.margin = '0';
-    header.appendChild(title);
-    section.appendChild(header);
+    try {
+        const result = await api.getNovels({
+            include_tags: currentState.filter.includeTags,
+            exclude_tags: currentState.filter.excludeTags,
+            sort_by: currentState.filter.sortBy
+        }, LIBRARY_PAGE_SIZE, libraryState.loadedCount);
 
-    const container = document.createElement('div');
-    container.id = 'tag-filter-container';
-    container.className = 'tag-filter-container';
-    section.appendChild(container);
+        libraryState.totalCount = result.total;
+        libraryState.allNovels = libraryState.allNovels.concat(result.novels);
+        libraryState.loadedCount += result.novels.length;
 
-    const setTagPanelState = (open) => {
-        container.style.display = open ? 'flex' : 'none';
-        title.textContent = open ? 'Filter by Tags ▼' : 'Filter by Tags ▶';
-        localStorage.setItem('tagPanelOpen', String(open));
-    };
+        // Append new novels to grid
+        const grid = $('novel-grid');
+        result.novels.forEach(n => {
+            const card = createNovelCard(n);
+            grid.appendChild(card);
+        });
 
-    header.onclick = () => setTagPanelState(container.style.display === 'none');
+        // Show/hide loader
+        if (libraryState.loadedCount < libraryState.totalCount) {
+            if (loader) show(loader);
+        } else {
+            if (loader) hide(loader);
+        }
+    } catch (e) {
+        console.error('loadMoreNovels error:', e);
+    } finally {
+        libraryState.isLoading = false;
+    }
+}
 
-    const hasActiveFilters = currentState.filter.includeTags.length > 0 || currentState.filter.excludeTags.length > 0;
-    setTagPanelState(hasActiveFilters || localStorage.getItem('tagPanelOpen') === 'true');
+function createNovelCard(n) {
+    const card = document.createElement('div');
+    card.className = 'novel-card';
+    const progress = n.chapter_count > 0 ? (n.chapters_read / n.chapter_count) * 100 : 0;
+    const initials = n.title.split(' ').map(w => w[0]).join('').substring(0, 3).toUpperCase();
 
-    allTags.forEach(tagObj => {
+    card.innerHTML = `
+        ${n.cover_path ? `<img src="/api/covers/${n.id}" onerror="this.style.display='none'; this.nextElementSibling.style.display='flex'">` : ''}
+        <div class="placeholder-cover" style="${n.cover_path ? 'display:none' : 'display:flex'}">${initials}</div>
+        <div class="novel-card-info">
+            <h3>${n.title}</h3>
+            <p>${n.author || 'Unknown Author'}</p>
+            <div class="progress-bar-container">
+                <div class="progress-bar-fill" style="width: ${progress}%"></div>
+            </div>
+            <p style="font-size: 0.75rem; margin-top: 5px">${n.chapters_read} / ${n.chapter_count} read</p>
+        </div>
+    `;
+    card.onclick = () => navigateTo(VIEWS.NOVEL, { id: n.id });
+    return card;
+}
+
+function setupLibraryInfiniteScroll() {
+    if (libraryState.scrollObserver) {
+        libraryState.scrollObserver.disconnect();
+    }
+
+    const sentinel = document.createElement('div');
+    sentinel.id = 'library-scroll-sentinel';
+    sentinel.style.height = '1px';
+    $('novel-grid').parentNode.appendChild(sentinel);
+
+    libraryState.scrollObserver = new IntersectionObserver((entries) => {
+        if (entries[0].isIntersecting) {
+            loadMoreNovels();
+        }
+    }, {
+        rootMargin: '200px'
+    });
+
+    libraryState.scrollObserver.observe(sentinel);
+}
+
+// --- Tag Panel ---
+async function loadTags() {
+    try {
+        const tags = await api.getTags(libraryState.tagSortBy);
+        libraryState.tags = tags;
+        renderTagPanel();
+    } catch (e) {
+        console.error('loadTags error:', e);
+    }
+}
+
+function renderTagPanel() {
+    const container = $('tag-filter-container');
+    if (!container) return;
+    container.innerHTML = '';
+
+    const searchTerm = libraryState.tagSearch.toLowerCase();
+    const filteredTags = (libraryState.tags || []).filter(t =>
+        t.name.toLowerCase().includes(searchTerm)
+    );
+
+    filteredTags.forEach(tagObj => {
         const tag = tagObj.name;
         const count = tagObj.count;
         const el = document.createElement('span');
@@ -270,7 +371,9 @@ function renderTagFilters() {
                 el.classList.add('include');
                 currentState.filter.includeTags.push(tag);
             }
-            renderLibrary();
+            // Reset library and reload with new filters
+            $('novel-grid').innerHTML = '';
+            renderLibrary(true);
         };
         container.appendChild(el);
     });
@@ -395,39 +498,20 @@ function startPollingFetchStatus(novelId) {
 
 // ─── Infinite Scroll Reader ───────────────────────────────────────────────────
 
-/**
- * Builds the DOM id for a chapter's section element.
- * @param {number} chapterId
- * @returns {string}
- */
 function chapterSectionId(chapterId) {
     return `ch-section-${chapterId}`;
 }
 
-/**
- * Creates a placeholder <section> for a chapter that isn't loaded yet.
- * The element holds the chapter's position in the DOM without content.
- *
- * @param {number} chapterId
- * @returns {HTMLElement}
- */
 function createChapterPlaceholder(chapterId) {
     const section = document.createElement('section');
     section.className = 'chapter-section';
     section.id = chapterSectionId(chapterId);
     section.dataset.chapterId = String(chapterId);
     section.dataset.loaded = 'false';
-    section.style.minHeight = '200px'; // Prevents layout jumps when loading
+    section.style.minHeight = '200px';
     return section;
 }
 
-/**
- * Renders chapter content into its section element.
- * Fetches from API if not already loaded.
- *
- * @param {number} chapterId
- * @returns {Promise<object|null>} The chapter data, or null on failure.
- */
 async function loadChapterSection(chapterId) {
     const sectionId = chapterSectionId(chapterId);
     let section = document.getElementById(sectionId);
@@ -437,7 +521,7 @@ async function loadChapterSection(chapterId) {
         $('reading-column').appendChild(section);
     }
 
-    if (section.dataset.loaded === 'true') return null; // Already loaded
+    if (section.dataset.loaded === 'true') return null;
 
     let chapter;
     try {
@@ -466,7 +550,6 @@ async function loadChapterSection(chapterId) {
     `;
     section.style.minHeight = '';
 
-    // Re-observe the new sentinel
     const sentinel = section.querySelector('.chapter-sentinel');
     if (infiniteScroll.observer && sentinel) {
         infiniteScroll.observer.observe(sentinel);
@@ -476,12 +559,6 @@ async function loadChapterSection(chapterId) {
     return chapter;
 }
 
-/**
- * Unloads a chapter section — clears its content but preserves its place in
- * the DOM with a fixed height so scroll position doesn't jump.
- *
- * @param {number} chapterId
- */
 function unloadChapterSection(chapterId) {
     const section = document.getElementById(chapterSectionId(chapterId));
     if (!section || section.dataset.loaded !== 'true') return;
@@ -493,12 +570,6 @@ function unloadChapterSection(chapterId) {
     infiniteScroll.loadedIds.delete(chapterId);
 }
 
-/**
- * Ensures the chapter window (current ±CHAPTER_WINDOW) is loaded and chapters
- * outside that range are unloaded.
- *
- * @param {number} currentChapterId  The chapter currently in the viewport.
- */
 async function updateChapterWindow(currentChapterId) {
     const ids = infiniteScroll.chapterIds;
     const currentIndex = ids.indexOf(currentChapterId);
@@ -508,14 +579,11 @@ async function updateChapterWindow(currentChapterId) {
     const windowEnd = Math.min(ids.length - 1, currentIndex + CHAPTER_WINDOW);
     const windowSet = new Set(ids.slice(windowStart, windowEnd + 1));
 
-    // Ensure placeholder sections exist for the full window first
     for (let i = windowStart; i <= windowEnd; i++) {
         const id = ids[i];
         if (!document.getElementById(chapterSectionId(id))) {
-            // Insert in correct order
             const section = createChapterPlaceholder(id);
             const col = $('reading-column');
-            // Find the right insertion point
             const existingSections = [...col.querySelectorAll('.chapter-section')];
             const nextSection = existingSections.find(s => ids.indexOf(Number(s.dataset.chapterId)) > i);
             if (nextSection) col.insertBefore(section, nextSection);
@@ -523,14 +591,12 @@ async function updateChapterWindow(currentChapterId) {
         }
     }
 
-    // Load chapters in window
     const loadPromises = [];
     for (let i = windowStart; i <= windowEnd; i++) {
         loadPromises.push(loadChapterSection(ids[i]));
     }
     await Promise.all(loadPromises);
 
-    // Unload chapters outside window
     for (const loadedId of [...infiniteScroll.loadedIds]) {
         if (!windowSet.has(loadedId)) {
             unloadChapterSection(loadedId);
@@ -538,44 +604,30 @@ async function updateChapterWindow(currentChapterId) {
     }
 }
 
-/**
- * Called by IntersectionObserver when a chapter sentinel crosses into view.
- * Updates the active chapter, saves progress, and adjusts the chapter window.
- *
- * @param {number} chapterId  The chapter whose sentinel became visible.
- */
 async function onChapterVisible(chapterId) {
     if (currentState.chapter && currentState.chapter.id === chapterId) return;
 
-    // Fetch chapter metadata (lightweight — content already in DOM)
     try {
         const chapter = await api.getChapter(chapterId);
         currentState.chapter = chapter;
 
-        // Update top bar title
         $('reader-title').textContent = `${currentState.novel ? currentState.novel.title + ' > ' : ''}${chapter.chapter_title}`;
 
-        // Update chapter index display
         if (currentState.novel) {
             const idx = currentState.novel.chapters.findIndex(c => c.id === chapterId);
             $('chapter-index-info').textContent = `Chapter ${idx + 1} of ${currentState.novel.chapters.length}`;
         }
 
-        // Update prev/next buttons
         updateNavButtons(chapter);
-
-        // Update bookmark and note icons
         updateBookmarkIcon();
         updateNoteIcon();
 
-        // Save progress for entering this chapter
         api.updateProgress({
             novel_id: chapter.novel_id,
             chapter_id: chapterId,
             scroll_position: 0.01
         }).catch(() => {});
 
-        // Expand the load window around the new active chapter
         await updateChapterWindow(chapterId);
 
     } catch (e) {
@@ -583,11 +635,6 @@ async function onChapterVisible(chapterId) {
     }
 }
 
-/**
- * Updates the prev/next navigation buttons in the top bar.
- *
- * @param {object} chapter  Chapter object with prev_chapter_id and next_chapter_id.
- */
 function updateNavButtons(chapter) {
     const goTo = (targetId) => {
         if (!targetId) return;
@@ -595,7 +642,6 @@ function updateNavButtons(chapter) {
         if (section) {
             section.scrollIntoView({ behavior: 'smooth', block: 'start' });
         } else {
-            // Section not in DOM yet — load it then scroll
             loadChapterSection(targetId).then(() => {
                 document.getElementById(chapterSectionId(targetId))
                     ?.scrollIntoView({ behavior: 'smooth', block: 'start' });
@@ -614,15 +660,7 @@ function updateNavButtons(chapter) {
     $('next-ch-btn-top').style.opacity = nextId ? 1 : 0.3;
 }
 
-/**
- * Initialises the infinite scroll reader for a given starting chapter.
- * Tears down any previous reader state, builds the chapter ID list,
- * loads the initial window, and restores scroll position.
- *
- * @param {number} startChapterId  The chapter to open initially.
- */
 async function initReader(startChapterId) {
-    // --- Tear down previous reader ---
     if (infiniteScroll.observer) {
         infiniteScroll.observer.disconnect();
         infiniteScroll.observer = null;
@@ -633,7 +671,6 @@ async function initReader(startChapterId) {
     const col = $('reading-column');
     col.innerHTML = '';
 
-    // --- Ensure we have a novel loaded ---
     if (!currentState.novel) {
         try {
             const chapter = await api.getChapter(startChapterId);
@@ -644,28 +681,23 @@ async function initReader(startChapterId) {
         }
     }
 
-    // Build the full ordered chapter id list
     infiniteScroll.chapterIds = (currentState.novel.chapters || []).map(c => c.id);
 
-    // --- Set up IntersectionObserver ---
-    // Fires when a chapter's sentinel (top of the chapter body) enters view
     infiniteScroll.observer = new IntersectionObserver((entries) => {
         for (const entry of entries) {
             if (entry.isIntersecting) {
                 const chId = Number(entry.target.dataset.chapterId);
                 onChapterVisible(chId);
-                break; // Only handle the first visible one per callback batch
+                break;
             }
         }
     }, {
-        rootMargin: '0px 0px -70% 0px', // Trigger when sentinel is near top of viewport
+        rootMargin: '0px 0px -70% 0px',
         threshold: 0
     });
 
-    // --- Load initial window ---
     await updateChapterWindow(startChapterId);
 
-    // --- Restore saved scroll position ---
     try {
         const allProgress = await api.getProgress();
         const prog = allProgress.find(p => p.chapter_id === startChapterId);
@@ -683,7 +715,6 @@ async function initReader(startChapterId) {
         console.error('initReader: progress restore failed', e);
     }
 
-    // Set initial chapter state
     try {
         const chapter = await api.getChapter(startChapterId);
         currentState.chapter = chapter;
@@ -710,7 +741,6 @@ function handleScroll() {
 
     clearTimeout(infiniteScroll.scrollSaveTimeout);
     infiniteScroll.scrollSaveTimeout = setTimeout(() => {
-        // Calculate scroll position relative to the current chapter's section
         const section = document.getElementById(chapterSectionId(currentState.chapter.id));
         if (!section) return;
 
@@ -725,7 +755,6 @@ function handleScroll() {
             scroll_position: savePos
         }).catch(() => {});
 
-        // Update progress bar based on position within entire page
         const pageScrollPos = scrollY / (document.body.scrollHeight - window.innerHeight || 1);
         const bar = $('reader-progress-bar');
         if (bar) bar.style.width = `${pageScrollPos * 100}%`;
@@ -762,6 +791,60 @@ document.querySelectorAll('.back-btn').forEach(btn => {
     btn.onclick = () => navigateTo(VIEWS[btn.dataset.target]);
 });
 
+// Tag Panel toggle
+$('tag-panel-toggle').onclick = () => {
+    const panel = $('tag-panel');
+    panel.classList.toggle('hidden');
+};
+$('close-tag-panel').onclick = () => hide($('tag-panel'));
+
+// Tag search
+$('tag-search-input').oninput = debounce((e) => {
+    libraryState.tagSearch = e.target.value;
+    renderTagPanel();
+}, 150);
+
+// Tag sort buttons
+$('tag-sort-count').onclick = () => {
+    libraryState.tagSortBy = 'count';
+    $('tag-sort-count').classList.add('active');
+    $('tag-sort-alpha').classList.remove('active');
+    loadTags();
+};
+$('tag-sort-alpha').onclick = () => {
+    libraryState.tagSortBy = 'name';
+    $('tag-sort-alpha').classList.add('active');
+    $('tag-sort-count').classList.remove('active');
+    loadTags();
+};
+
+// Search Panel toggle
+$('search-panel-toggle').onclick = () => {
+    const panel = $('search-panel');
+    panel.classList.toggle('hidden');
+    if (!panel.classList.contains('hidden')) {
+        setTimeout(() => $('search-panel-input').focus(), 100);
+    }
+};
+$('close-search-panel').onclick = () => hide($('search-panel'));
+
+// Search panel input
+$('search-panel-input').oninput = debounce(async (e) => {
+    const q = e.target.value;
+    if (q.length < 2) {
+        $('search-novel-results').innerHTML = '';
+        $('search-chapter-results').innerHTML = '';
+        return;
+    }
+    const results = await api.search(q);
+    $('search-novel-results').innerHTML = results.novels.map(n =>
+        `<div class="search-result-item" onclick="window.app.navToNovel(${n.id})">${n.title}</div>`
+    ).join('');
+    $('search-chapter-results').innerHTML = results.chapters.map(c =>
+        `<div class="search-result-item" onclick="window.app.navToChapter(${c.id})">${c.chapter_title}</div>`
+    ).join('');
+}, 300);
+
 // Settings Panel
 $('settings-btn').onclick = () => {
     $('settings-panel').classList.toggle('hidden');
@@ -788,7 +871,26 @@ $('column-width-range').oninput = (e) => { currentState.settings.columnWidth = `
 $('reset-settings-btn').onclick = () => { currentState.settings = { ...DEFAULT_SETTINGS }; saveSettings(); };
 
 // Sort
-$('sort-select').onchange = (e) => { currentState.filter.sortBy = e.target.value; renderLibrary(); };
+$('sort-select').onchange = (e) => {
+    currentState.filter.sortBy = e.target.value;
+    $('novel-grid').innerHTML = '';
+    renderLibrary(true);
+};
+
+// Library search — filters the already-loaded novels client-side
+$('library-search').oninput = debounce((e) => {
+    const q = e.target.value.toLowerCase().trim();
+    const cards = document.querySelectorAll('.novel-card');
+    cards.forEach(card => {
+        const title = card.querySelector('h3')?.textContent?.toLowerCase() || '';
+        const author = card.querySelector('p')?.textContent?.toLowerCase() || '';
+        if (!q || title.includes(q) || author.includes(q)) {
+            card.style.display = '';
+        } else {
+            card.style.display = 'none';
+        }
+    });
+}, 200);
 
 // Bookmarks
 $('bookmark-btn').onclick = async () => {
@@ -826,34 +928,22 @@ $('note-textarea').oninput = debounce(async (e) => {
     updateNoteIcon();
 }, 500);
 
-// Search
-const toggleSearch = () => {
-    const modal = $('search-modal');
-    modal.classList.toggle('hidden');
-    if (!modal.classList.contains('hidden')) $('global-search-input').focus();
-};
-$('search-toggle-btn').onclick = toggleSearch;
-
-$('global-search-input').oninput = debounce(async (e) => {
-    const q = e.target.value;
-    if (q.length < 2) return;
-    const results = await api.search(q);
-    $('novel-results').innerHTML = results.novels.map(n =>
-        `<div class="search-result-item" onclick="app.navToNovel(${n.id})">${n.title}</div>`
-    ).join('');
-    $('chapter-results').innerHTML = results.chapters.map(c =>
-        `<div class="search-result-item" onclick="app.navToChapter(${c.id})">${c.chapter_title}</div>`
-    ).join('');
-}, 300);
-
+// Expose for inline onclick handlers
 window.app = {
-    navToNovel: (id) => { hide($('search-modal')); navigateTo(VIEWS.NOVEL, { id }); },
-    navToChapter: (id) => { hide($('search-modal')); navigateTo(VIEWS.READER, { id }); }
+    navToNovel: (id) => { hide($('search-panel')); navigateTo(VIEWS.NOVEL, { id }); },
+    navToChapter: (id) => { hide($('search-panel')); navigateTo(VIEWS.READER, { id }); }
 };
 
 // Keyboard Shortcuts
 window.onkeydown = (e) => {
-    if ((e.ctrlKey || e.metaKey) && e.key === 'k') { e.preventDefault(); toggleSearch(); }
+    if ((e.ctrlKey || e.metaKey) && e.key === 'k') {
+        e.preventDefault();
+        const panel = $('search-panel');
+        panel.classList.toggle('hidden');
+        if (!panel.classList.contains('hidden')) {
+            setTimeout(() => $('search-panel-input').focus(), 100);
+        }
+    }
 
     if (currentState.view === VIEWS.READER) {
         if (e.target.tagName === 'TEXTAREA' || e.target.tagName === 'INPUT') return;
@@ -866,10 +956,27 @@ window.onkeydown = (e) => {
             if (!document.fullscreenElement) document.documentElement.requestFullscreen();
             else document.exitFullscreen();
         }
-        if (e.key === 'Escape') { hide($('settings-panel')); hide($('notes-panel')); hide($('search-modal')); }
+        if (e.key === 'Escape') {
+            hide($('settings-panel'));
+            hide($('notes-panel'));
+            hide($('search-panel'));
+            hide($('tag-panel'));
+        }
     }
 };
 
 // Initialization
 loadSettings();
-navigateTo(VIEWS.LIBRARY);
+initPopstateHandler();
+
+// Check initial URL hash for deep linking
+const hash = window.location.hash;
+if (hash.startsWith('#novel/')) {
+    const novelId = parseInt(hash.split('/')[1]);
+    if (novelId) navigateTo(VIEWS.NOVEL, { id: novelId }, false);
+} else if (hash.startsWith('#reader/')) {
+    const chapterId = parseInt(hash.split('/')[1]);
+    if (chapterId) navigateTo(VIEWS.READER, { id: chapterId }, false);
+} else {
+    navigateTo(VIEWS.LIBRARY, {}, false);
+}

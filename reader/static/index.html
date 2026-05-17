@@ -8,11 +8,47 @@
 </head>
 <body>
 <div id="app">
+    <!-- Left Sidebar: Tag Panel -->
+    <div id="tag-panel" class="side-panel left">
+        <div class="panel-header">
+            <h3>Tags</h3>
+            <button id="close-tag-panel" class="close-btn">&times;</button>
+        </div>
+        <div class="tag-panel-controls">
+            <input type="text" id="tag-search-input" placeholder="Search tags..." class="panel-search-input">
+            <div class="tag-sort-btns">
+                <button id="tag-sort-count" class="tag-sort-btn active" title="Sort by count">#</button>
+                <button id="tag-sort-alpha" class="tag-sort-btn" title="Sort alphabetically">A-Z</button>
+            </div>
+        </div>
+        <div id="tag-filter-container" class="tag-filter-container"></div>
+    </div>
+
+    <!-- Left Sidebar: Search Panel -->
+    <div id="search-panel" class="side-panel left hidden">
+        <div class="panel-header">
+            <h3>Search</h3>
+            <button id="close-search-panel" class="close-btn">&times;</button>
+        </div>
+        <input type="text" id="search-panel-input" placeholder="Search novels or chapters..." class="panel-search-input" autofocus>
+        <div id="search-panel-results" class="search-panel-results">
+            <section>
+                <h4>Novels</h4>
+                <div id="search-novel-results"></div>
+            </section>
+            <section>
+                <h4>Chapters</h4>
+                <div id="search-chapter-results"></div>
+            </section>
+        </div>
+    </div>
+
     <!-- Views -->
     <div id="library-view" class="view">
         <header>
             <h1>My Library</h1>
             <div class="header-actions">
+                <button id="tag-panel-toggle" class="icon-btn" title="Tags">🏷 Tags</button>
                 <input type="text" id="library-search" placeholder="Filter current list...">
                 <select id="sort-select">
                     <option value="title">Title (A-Z)</option>
@@ -20,14 +56,12 @@
                     <option value="chapter_count">Chapter Count</option>
                     <option value="word_count">Word Count</option>
                 </select>
-                <button id="search-toggle-btn">Search (Ctrl+K)</button>
+                <button id="search-panel-toggle" class="icon-btn" title="Search (Ctrl+K)">🔍 Search</button>
             </div>
         </header>
 
-        <!-- Tag panel header and container are built entirely by renderTagFilters() in app.js -->
-        <section id="tag-filter-section" class="tag-filter-section"></section>
-
         <div id="novel-grid" class="novel-grid"></div>
+        <div id="library-loader" class="library-loader hidden">Loading more...</div>
     </div>
 
     <div id="novel-view" class="view hidden">
@@ -77,22 +111,6 @@
     </div>
 
     <!-- Overlays -->
-    <div id="search-modal" class="modal hidden">
-        <div class="modal-content">
-            <input type="text" id="global-search-input" placeholder="Search for novels or chapters..." autofocus>
-            <div id="search-results">
-                <section>
-                    <h4>Novels</h4>
-                    <div id="novel-results"></div>
-                </section>
-                <section>
-                    <h4>Chapters</h4>
-                    <div id="chapter-results"></div>
-                </section>
-            </div>
-        </div>
-    </div>
-
     <div id="settings-panel" class="side-panel right hidden">
         <div class="panel-header">
             <h3>Settings</h3>

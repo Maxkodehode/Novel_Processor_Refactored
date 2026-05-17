@@ -136,6 +136,8 @@ async def get_novels(
     include_tags: Optional[List[str]] = Query(None),
     exclude_tags: Optional[List[str]] = Query(None),
     sort_by: str = "title",
+    limit: Optional[int] = Query(None),
+    offset: int = Query(0),
 ):
     """
     Returns the novel list with chapter counts, read progress, and word count.
@@ -158,9 +160,10 @@ async def get_novels(
     has_tag_filters = bool(include_tags or exclude_tags)
     now = _time.monotonic()
     cache_fresh = (now - _novels_cache_ts) < NOVELS_CACHE_TTL_SECONDS
+    paginated = limit is not None
 
-    # --- Cache hit: no tag filters and cache is warm ---
-    if not has_tag_filters and cache_fresh and _novels_cache:
+    # --- Cache hit: no tag filters, cache is warm, and not paginated ---
+    if not has_tag_filters and cache_fresh and _novels_cache and not paginated:
         novels = _novels_cache
         sort_map_py = {
             "title": lambda n: (n.get("title") or "").lower(),
@@ -217,25 +220,41 @@ async def get_novels(
     order_by = sort_map.get(sort_by, "n.title ASC")
     query += f" ORDER BY {order_by}"
 
+    # For paginated requests, get total count first, then apply LIMIT/OFFSET
+    total = 0
+    if paginated:
+        count_query = f"SELECT COUNT(*) as cnt FROM ({query})"
+        total = app.state.db.execute(count_query, tuple(params)).fetchone()["cnt"]
+        query += " LIMIT ? OFFSET ?"
+        params.extend([limit, offset])
+
     cursor = app.state.db.execute(query, tuple(params))
     rows = [dict(row) for row in cursor.fetchall()]
 
-    # Populate cache only for unfiltered results
-    if not has_tag_filters:
+    # Populate cache only for unfiltered, non-paginated results
+    if not has_tag_filters and not paginated:
         _novels_cache = rows
         _novels_cache_ts = now
+
+    if paginated:
+        return {"novels": rows, "total": total, "offset": offset, "limit": limit}
 
     return rows
 
 
 @app.get("/api/tags")
-async def get_tags():
-    query = """
+async def get_tags(sort_by: str = "count"):
+    """
+    Returns all tags with their novel count.
+    sort_by: 'count' for most-novels-first, 'name' for alphabetical.
+    """
+    order_clause = "novel_count DESC, t.name ASC" if sort_by == "count" else "t.name ASC"
+    query = f"""
             SELECT t.name, COUNT(nt.novel_id) as novel_count
             FROM tags t
                      LEFT JOIN novel_tags nt ON t.id = nt.tag_id
             GROUP BY t.id, t.name
-            ORDER BY novel_count DESC, t.name ASC \
+            ORDER BY {order_clause} \
             """
     cursor = app.state.db.execute(query)
     return [
