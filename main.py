@@ -13,6 +13,9 @@ Usage:
 
     # Use a locally saved HTML file instead of fetching (dev mode)
     python main.py --url https://www.royalroad.com/fiction/12345/some-novel --use-local page.html
+
+    # Queue multiple novels at once
+    python main.py --urls URL1 URL2 URL3 [--no-fetch]
 """
 
 import argparse
@@ -33,7 +36,7 @@ logger = logging.getLogger(__name__)
 
 def main():
     parser = argparse.ArgumentParser(description="Novel scraper pipeline")
-    parser.add_argument("--url", required=True, help="Novel landing page URL")
+    parser.add_argument("--url", default=None, help="Novel landing page URL")
     parser.add_argument(
         "--no-fetch",
         action="store_true",
@@ -50,7 +53,19 @@ def main():
         default=None,
         help="Load HTML from a local file instead of fetching (dev mode)",
     )
+    parser.add_argument(
+        "--urls",
+        nargs="+",
+        metavar="URL",
+        default=None,
+        help="One or more novel landing page URLs to scrape in sequence",
+    )
     args = parser.parse_args()
+
+    # Normalize: single --url or multiple --urls
+    urls = args.urls if args.urls else ([args.url] if args.url else [])
+    if not urls:
+        parser.error("Provide --url URL or --urls URL [URL ...]")
 
     # ── Step 1: Ensure DB schema exists ──────────────────────────────────────
     logger.info("Initialising database schema...")
@@ -65,44 +80,53 @@ def main():
 
     scraper = ScraperService(network_client, browser_service, repository, cover_manager)
 
-    # ── Step 3: Scrape the novel landing page ────────────────────────────────
-    logger.info(f"Scraping: {args.url}")
-    save_html = "page.html" if args.debug else None
+    # ── Process each URL ─────────────────────────────────────────────────────
+    total = len(urls)
+    for i, url in enumerate(urls, 1):
+        logger.info(f"{'=' * 60}")
+        logger.info(f"[{i}/{total}] Processing: {url}")
+        logger.info(f"{'=' * 60}")
 
-    with browser_service:
-        data = scraper.scrape_novel(
-            url=args.url, use_local=args.use_local, save_html=save_html
-        )
+        # ── Step 3: Scrape the novel landing page ────────────────────────────
+        save_html = "page.html" if args.debug else None
 
-        if not data or not data.get("title"):
-            logger.error("Scrape returned no usable data. Check the URL or adapter.")
-            sys.exit(1)
+        with browser_service:
+            data = scraper.scrape_novel(
+                url=url, use_local=args.use_local, save_html=save_html
+            )
 
-        logger.info(
-            f"Scraped: '{data['title']}' — {len(data.get('chapters', []))} chapters found"
-        )
+            if not data or not data.get("title"):
+                logger.error(f"Scrape returned no usable data for {url}. Skipping.")
+                continue
 
-        if args.debug:
-            with open("output.json", "w", encoding="utf-8") as f:
-                json.dump(data, f, ensure_ascii=False, indent=2)
-            logger.info("Debug JSON saved to output.json")
+            logger.info(
+                f"Scraped: '{data['title']}' — {len(data.get('chapters', []))} chapters found"
+            )
 
-        # ── Step 4: Populate DB ──────────────────────────────────────────────────
-        logger.info("Inserting metadata into database...")
-        novel_id = scraper.populate_novel(data)
+            if args.debug:
+                debug_file = f"output_{i}.json"
+                with open(debug_file, "w", encoding="utf-8") as f:
+                    json.dump(data, f, ensure_ascii=False, indent=2)
+                logger.info(f"Debug JSON saved to {debug_file}")
 
-        if novel_id is None:
-            logger.error("DB populate failed — aborting.")
-            sys.exit(1)
+            # ── Step 4: Populate DB ────────────────────────────────────────────
+            logger.info("Inserting metadata into database...")
+            novel_id = scraper.populate_novel(data)
 
-        # ── Step 5: Fetch chapter content ────────────────────────────────────────
-        if args.no_fetch:
-            logger.info("--no-fetch set: skipping chapter content fetching.")
-        else:
-            logger.info("Starting chapter content fetch...")
-            scraper.fetch_chapters(novel_id=novel_id)
+            if novel_id is None:
+                logger.error(f"DB populate failed for {url} — skipping.")
+                continue
 
-    logger.info("Pipeline complete.")
+            # ── Step 5: Fetch chapter content ──────────────────────────────────
+            if args.no_fetch:
+                logger.info("--no-fetch set: skipping chapter content fetching.")
+            else:
+                logger.info("Starting chapter content fetch...")
+                scraper.fetch_chapters(novel_id=novel_id)
+
+        logger.info(f"[{i}/{total}] Complete: {data.get('title', url)}")
+
+    logger.info(f"Pipeline complete — {total} novel(s) processed.")
 
 
 if __name__ == "__main__":
