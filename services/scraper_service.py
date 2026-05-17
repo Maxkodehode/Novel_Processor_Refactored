@@ -502,7 +502,7 @@ class ScraperService:
         # updated in the DB. Only needed for ScribbleHub (other sites don't change slugs).
         if novel_id is not None:
             novel_row = self.repository.get_novel_by_id(novel_id)
-            if novel_row and novel_row.get("source_url") and "scribblehub.com" in novel_row["source_url"]:
+            if novel_row and "source_url" in novel_row.keys() and novel_row["source_url"] and "scribblehub.com" in novel_row["source_url"]:
                 logger.info(
                     f"[fetch_chapters] Refreshing chapter URLs for novel {novel_id}..."
                 )

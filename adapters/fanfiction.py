@@ -211,9 +211,6 @@ class FanFictionAdapter(BaseAdapter):
         if chap_select:
             for opt in chap_select.find_all("option"):
                 idx = int(opt["value"])
-                # FFN's HTML has unclosed <option> tags, causing BS4 to nest
-                # them. .string returns None when there are child elements, so
-                # we use .contents[0] to get just the first text node.
                 first = opt.contents[0] if opt.contents else None
                 if first and hasattr(first, 'strip'):
                     ch_title = first.strip()
@@ -228,7 +225,31 @@ class FanFictionAdapter(BaseAdapter):
                         "published": None,
                     }
                 )
-        elif chapter_count and story_id:
+
+        # FFN's <select> dropdown sometimes omits the most recently added
+        # chapter. If we have a chapter_count from the stats, fill in any
+        # missing chapters at the end so we don't silently lose the last one.
+        if chapter_count and story_id and len(chapters) < chapter_count:
+            existing_ids = {ch["id"] for ch in chapters}
+            for idx in range(1, chapter_count + 1):
+                if idx not in existing_ids:
+                    chapters.append(
+                        {
+                            "id": idx,
+                            "order": idx - 1,
+                            "title": f"Chapter {idx}",
+                            "url": f"https://www.fanfiction.net/s/{story_id}/{idx}/",
+                            "published": None,
+                        }
+                    )
+            if DEBUG:
+                logger.debug(
+                    f"[parse] Filled {chapter_count - len(chapters)} missing "
+                    f"chapter(s) from chapter_count={chapter_count}"
+                )
+
+        # Fallback: no dropdown at all, generate from chapter_count
+        if not chapters and chapter_count and story_id:
             chapters = [
                 {
                     "id": i + 1,
