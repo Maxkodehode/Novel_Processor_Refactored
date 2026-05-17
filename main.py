@@ -100,7 +100,7 @@ def main():
             logger.info("--no-fetch set: skipping chapter content fetching.")
         else:
             logger.info("Starting chapter content fetch...")
-            scraper.fetch_chapters()
+            scraper.fetch_chapters(novel_id=novel_id)
 
     logger.info("Pipeline complete.")
 

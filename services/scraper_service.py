@@ -499,19 +499,21 @@ class ScraperService:
 
         # --- Refresh chapter URLs for ScribbleHub novels before fetching ---
         # Per novel: re-scrape the novel's landing page so changed slugs are
-        # updated in the DB. Global mode: refresh ALL ScribbleHub novels first.
+        # updated in the DB. Only needed for ScribbleHub (other sites don't change slugs).
         if novel_id is not None:
-            logger.info(
-                f"[fetch_chapters] Refreshing chapter URLs for novel {novel_id}..."
-            )
-            self.refresh_chapter_urls_for_novel(novel_id)
-            # Re-fetch task list in case new chapters were inserted
-            tasks = self.repository.get_pending_chapters(novel_id)
-            if not tasks:
+            novel_row = self.repository.get_novel_by_id(novel_id)
+            if novel_row and novel_row.get("source_url") and "scribblehub.com" in novel_row["source_url"]:
                 logger.info(
-                    "[fetch_chapters] All chapters up to date after URL refresh."
+                    f"[fetch_chapters] Refreshing chapter URLs for novel {novel_id}..."
                 )
-                return
+                self.refresh_chapter_urls_for_novel(novel_id)
+                # Re-fetch task list in case new chapters were inserted
+                tasks = self.repository.get_pending_chapters(novel_id)
+                if not tasks:
+                    logger.info(
+                        "[fetch_chapters] All chapters up to date after URL refresh."
+                    )
+                    return
         else:
             # Global backfill: refresh URLs for every ScribbleHub novel first
             # so we don't waste retries on stale 404 slugs.
