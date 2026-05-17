@@ -31,7 +31,7 @@ const DEFAULT_SETTINGS = {
     fontSize: 18,
     lineHeight: 1.6,
     paragraphSpacing: 1.0,
-    columnWidth: '70ch'
+    columnWidth: '90ch'
 };
 
 const LIBRARY_PAGE_SIZE = 50;
@@ -127,6 +127,13 @@ function debounce(func, wait) {
     };
 }
 
+/** Convert "rgb(r, g, b)" or "rgba(r, g, b, a)" to "#rrggbb" for <input type="color">. */
+function rgbToHex(rgb) {
+    const m = rgb.match(/(\d+)/g);
+    if (!m) return '#000000';
+    return '#' + m.slice(0, 3).map(x => parseInt(x).toString(16).padStart(2, '0')).join('');
+}
+
 // --- Settings & Theme ---
 function loadSettings() {
     const saved = localStorage.getItem('reader_settings');
@@ -168,8 +175,14 @@ function applySettings() {
     if ($('para-spacing-range')) $('para-spacing-range').value = s.paragraphSpacing;
     if ($('font-family-select')) $('font-family-select').value = s.fontFamily;
     if ($('column-width-range')) $('column-width-range').value = parseInt(s.columnWidth);
-    if ($('bg-color-picker')) $('bg-color-picker').value = getComputedStyle(root).getPropertyValue('--bg-primary').trim();
-    if ($('text-color-picker')) $('text-color-picker').value = getComputedStyle(root).getPropertyValue('--text-primary').trim();
+    if ($('bg-color-picker')) {
+        const bg = getComputedStyle(root).getPropertyValue('--bg-primary').trim();
+        $('bg-color-picker').value = bg.startsWith('#') ? bg : rgbToHex(bg);
+    }
+    if ($('text-color-picker')) {
+        const txt = getComputedStyle(root).getPropertyValue('--text-primary').trim();
+        $('text-color-picker').value = txt.startsWith('#') ? txt : rgbToHex(txt);
+    }
 }
 
 // --- Browser History ---
