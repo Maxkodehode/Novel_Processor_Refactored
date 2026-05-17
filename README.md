@@ -6,9 +6,9 @@ A comprehensive, modular, service-oriented novel scraper, manager, and reader sy
 
 - **Modular Architecture**: Built with a Service-Based Architecture for easy maintenance and scalability.
 - **Multiple Adapters**: Built-in support for:
-  - [Royal Road](https://www.royalroad.com/)
-  - [Scribble Hub](https://www.scribblehub.com/) (Chapter lists are fetched via direct AJAX POST — no Playwright required. Falls back to static HTML parsing if AJAX fails.)
-  - [FanFiction.net](https://www.fanfiction.net/) (Note: FFN may block automated requests via Cloudflare. Playwright fallback can help but is not guaranteed.)
+  - [Royal Road](https://www.royalroad.com/) — fast `curl_cffi` fetch, no browser needed
+  - [Scribble Hub](https://www.scribblehub.com/) — chapter lists fetched via direct AJAX POST to `admin-ajax.php` (no Playwright needed). Falls back to static HTML parsing if AJAX fails. Chapter URLs are refreshed before fetch to handle ScribbleHub slug changes.
+  - [FanFiction.net](https://www.fanfiction.net/) — uses Playwright with stealth to bypass Cloudflare bot protection. Fast `curl_cffi` fetch is attempted first as a fallback.
 - **Mass Discovery Pipeline**: Crawl site-wide ranking lists and automatically hydrate your library with novel metadata and full chapter lists.
 - **Cross-Platform Deduplication**: Two-tier deduplication — exact URL matching and intelligent fuzzy title matching (95% similarity) — to avoid inserting the same novel twice across platforms.
 - **Stubbed Novel Detection**: During sync, if a novel's source page returns zero chapters but the local database has chapters, the novel is recognised as stubbed/sold and local content is preserved. If neither the source nor the database has chapters, the novel is marked `ABANDONED` and excluded from all future processing.
@@ -22,7 +22,7 @@ A comprehensive, modular, service-oriented novel scraper, manager, and reader sy
   - On-demand chapter fetching and updating directly from the UI, with a live progress bar.
 - **Robust Infrastructure**:
   - Fast fetch using `curl_cffi` with browser impersonation and forced `gzip/deflate` encoding to avoid curl error 61 on CDNs that serve Brotli or Zstd.
-  - Playwright fallback with stealth patches (`playwright-stealth`) for JS-heavy sites and CDN hotlink protection.
+  - Playwright fallback with stealth patches (`playwright-stealth`) for JS-heavy sites and CDN hotlink protection. Only used when the fast path fails or when a site requires a real browser (e.g. FanFiction.net).
   - Persistent Playwright browser context — cookies and session state are reused across requests so the scraper looks like a returning user, not a new one each time.
   - Jittered, rate-limited request delays throughout (configurable per pipeline stage) to avoid being blocked.
   - Repository Pattern for all SQLite access.
@@ -40,10 +40,10 @@ project_root/
 │   └── run_logger.py              # Structured per-run fetch logging with rotation
 │
 ├── adapters/                      # Site-specific parsing logic
-│   ├── base.py                    # Abstract base adapter
+│   ├── base.py                    # Abstract base adapter (needs_browser() classmethod)
 │   ├── royalroad.py               # Royal Road metadata + chapter parser
 │   ├── scribblehub.py             # ScribbleHub parser (direct AJAX for chapters)
-│   ├── fanfiction.py              # FanFiction.net parser
+│   ├── fanfiction.py              # FanFiction.net parser (Playwright for Cloudflare)
 │   ├── discovery_base.py          # Abstract base discovery adapter
 │   └── discovery_adapters.py      # List page parsers for mass discovery
 │
@@ -60,7 +60,7 @@ project_root/
 │   └── static/                    # Frontend (index.html, app.js, style.css)
 │
 ├── utils/                         # General utility functions (slugify, etc.)
-├── main.py                        # Single novel scraper entry point
+├── main.py                        # Single (or multi) novel scraper entry point
 ├── sync_novels.py                 # Library sync entry point (cron-friendly)
 ├── backfill_chapter_urls.py       # Fix novels missing chapter titles and URLs
 ├── backfill_chapters.py           # Download missing chapter content library-wide
@@ -72,8 +72,8 @@ project_root/
 
 1. **Clone the repository**:
    ```bash
-   git clone https://github.com/Maxkodehode/Novel_Processor.git
-   cd Novel_Processor
+   git clone https://github.com/Maxkodehode/Novel_Processor_Refactored.git
+   cd Novel_Processor_Refactored
    ```
 
 2. **Set up a virtual environment**:
@@ -96,21 +96,7 @@ project_root/
 
 ## Usage
 
-### 1. Mass Discovery
-
-Hydrate your database with top-rated novels from supported platforms:
-
-```bash
-# Discover top 100 novels from Royal Road (20 novels per page)
-python -m services.discovery_service --site royalroad --start 1 --end 5
-
-# Discover top 400 novels from ScribbleHub
-python -m services.discovery_service --site scribblehub --start 1 --end 20
-```
-
-Discovery saves the novel title, author, synopsis, cover, tags, and the full list of chapter titles and URLs. It does **not** download chapter text — that is a separate step. Rate limiting is applied automatically between every list page and between every individual novel hydration request.
-
-### 2. Single Novel Scraping
+### 1. Single Novel Scraping
 
 Scrape a specific novel by URL:
 
@@ -128,7 +114,36 @@ python main.py --url https://www.royalroad.com/fiction/12345/novel-title --debug
 python main.py --url https://www.royalroad.com/fiction/12345/novel-title --use-local page.html
 ```
 
-### 3. Synchronising Updates
+### 2. Multiple Novels (Batch)
+
+Queue several novels in a single run. Each novel is processed sequentially — scrape → populate DB → fetch chapters — before moving to the next. If one novel fails, it is skipped and processing continues with the rest.
+
+```bash
+# Scrape multiple novels at once
+python main.py --urls \
+  https://www.fanfiction.net/s/13509722/1/Some-FFN-Story \
+  https://www.royalroad.com/fiction/21220/mother-of-learning \
+  https://www.scribblehub.com/series/123456/some-novel/
+
+# Metadata only for all novels (no chapter content download)
+python main.py --urls URL1 URL2 URL3 --no-fetch
+```
+
+### 3. Mass Discovery
+
+Hydrate your database with top-rated novels from supported platforms:
+
+```bash
+# Discover top 100 novels from Royal Road (20 novels per page)
+python -m services.discovery_service --site royalroad --start 1 --end 5
+
+# Discover top 400 novels from ScribbleHub
+python -m services.discovery_service --site scribblehub --start 1 --end 20
+```
+
+Discovery saves the novel title, author, synopsis, cover, tags, and the full list of chapter titles and URLs. It does **not** download chapter text — that is a separate step. Rate limiting is applied automatically between every list page and between every individual novel hydration request.
+
+### 4. Synchronising Updates
 
 Run this to check for new chapters across your library. Ideal for cron jobs.
 
@@ -144,7 +159,7 @@ Novels whose source page returns zero chapters are handled automatically:
 - **Source has 0, DB has chapters** → novel was likely sold or stubbed by the author. Local chapters are preserved untouched.
 - **Source has 0, DB also has 0** → novel was never populated. Marked `ABANDONED` and excluded from all future syncs.
 
-### 4. Database Maintenance
+### 5. Database Maintenance
 
 **Fix novels missing chapter titles and URLs** (e.g. novels discovered before the chapter-URL bug was fixed):
 
@@ -194,7 +209,7 @@ A cover is considered invalid if `cover_path` is NULL, the file no longer exists
 
 All maintenance scripts are safe to re-run and will not create duplicate entries.
 
-### 5. Reading Offline
+### 6. Reading Offline
 
 Start the web-based reader:
 
@@ -245,13 +260,21 @@ All settings are in `core/config.py`:
 
 **Royal Road covers and curl error 61** — Royal Road's CDN can respond with Brotli or Zstd content encoding, which some builds of libcurl cannot decode. The network client now forces `Accept-Encoding: gzip, deflate` on all requests to prevent this. If a cover download still fails via the fast fetch path, it automatically falls back to Playwright, which handles encoding transparently.
 
-**ScribbleHub chapter loading** — ScribbleHub renders chapter lists via AJAX. The adapter now uses a direct POST to `admin-ajax.php` with `pagenum=-1` to fetch all chapters in a single request, without Playwright. This is faster and more reliable than the previous JS-rendered approach. If the AJAX call fails, the adapter falls back to whatever chapters are present in the static HTML (typically the first 15).
+**ScribbleHub chapter loading** — ScribbleHub renders chapter lists via AJAX. The adapter uses a direct POST to `admin-ajax.php` with `pagenum=-1` to fetch all chapters in a single request, without Playwright. If the AJAX call fails, the adapter falls back to whatever chapters are present in the static HTML (typically the first 15). Before fetching chapter content, the scraper refreshes chapter URLs for ScribbleHub novels to handle slug changes — this only runs for the specific novel being fetched (not the entire library) unless running in global backfill mode.
 
-**FanFiction.net blocking** — FanFiction.net uses Cloudflare bot protection that may block requests from `curl_cffi`. The fast fetch path may return an empty or redirect page instead of story content. The Playwright fallback can sometimes bypass this, but FFN may also challenge headless browsers. Consider using the FFN API or manual HTML dumps for problematic stories.
+**FanFiction.net Cloudflare bypass** — FanFiction.net uses Cloudflare bot protection. The adapter uses Playwright with `playwright-stealth` to bypass this. The fast `curl_cffi` fetch path is attempted first; if it returns a Cloudflare challenge page, the Playwright fallback takes over automatically. The `needs_browser()` mechanism ensures FFN always gets browser treatment while other sites use the fast path.
+
+**FFN chapter dropdown** — FFN's `<select>` dropdown on the story landing page sometimes omits the most recently added chapter. The parser now cross-references the `chapter_count` from the stats line and fills in any missing chapters at the end, so the last chapter is never silently dropped.
 
 **Persistent browser context** — The Playwright browser is started once per pipeline run and its context (cookies, session state) is reused across all requests in that run. This makes the scraper look like a returning user rather than spawning a fresh fingerprint for every page, which reduces the chance of bot detection.
 
 **ABANDONED novels** — novels marked `ABANDONED` are excluded from the reader library, all sync runs, and all backfill scripts. They remain in the database for deduplication purposes so the same novel is never re-inserted under a slightly different URL or title. To un-abandon a novel, update its `status` column directly in the database.
+
+**Database maintenance** — The SQLite database can grow over time due to deleted/updated rows leaving free pages. Running `VACUUM` periodically reclaims this space:
+```bash
+sqlite3 novels.db "VACUUM;"
+```
+This is safe to run and will not delete any data. Stop the hermes-host service first if it is running.
 
 ## License
 
