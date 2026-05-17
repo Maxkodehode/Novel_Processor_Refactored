@@ -22,8 +22,7 @@ print(f"DEBUG: sys.path: {sys.path}")
 from playwright.sync_api import sync_playwright
 
 try:
-    from playwright_stealth import stealth_sync
-
+    from playwright_stealth.stealth import Stealth
     _STEALTH_AVAILABLE = True
 except Exception as e:
     _STEALTH_AVAILABLE = False
@@ -160,7 +159,7 @@ class BrowserService:
 
         # Apply stealth patches before any navigation
         if _STEALTH_AVAILABLE:
-            stealth_sync(page)
+            Stealth().apply_stealth_sync(page)
             if DEBUG:
                 logger.debug(f"[get_page_content] stealth applied for {url}")
 

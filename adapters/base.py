@@ -10,6 +10,11 @@ class BaseAdapter(ABC):
         host = urlparse(url).netloc.lower()
         return any(h in host for h in cls.HOSTS)
 
+    @classmethod
+    def needs_browser(cls) -> bool:
+        """Return True if this site requires a real browser (Playwright) to bypass anti-bot."""
+        return False
+
     @abstractmethod
     def parse(self, soup, url: str) -> dict:
         """Parse novel landing page."""

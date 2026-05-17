@@ -89,43 +89,47 @@ class FanFictionAdapter(BaseAdapter):
         # FFN serves covers from CDN subdomains (ffnet.b-cdn.net, img.ffn.io, etc.)
         # that require a Referer header pointing at fanfiction.net. The Referer
         # injection is handled in cover_manager.py based on the stored URL.
-        cover = soup.select_one("img.cimage")
+        #
+        # FFN has two img.cimage elements:
+        #   1. Visible thumbnail: src="/image/<id>/75/"
+        #   2. Hidden modal:      src="placeholder.jpg" data-original="/image/<id>/180/"
+        # We prefer data-original (full size) from any cimage element.
         cover_url = None
-        if cover:
-            src = cover.get("src", "")
+        for cimg in soup.select("img.cimage"):
+            # Prefer data-original (full-size) over src (thumbnail)
+            src = cimg.get("data-original") or cimg.get("src", "")
+            if not src:
+                continue
+
             if src.startswith("http"):
                 cover_url = src
             elif src.startswith("//"):
                 cover_url = "https:" + src
             elif src.startswith("/"):
-                # Relative path — prepend FF.net domain
                 cover_url = "https://www.fanfiction.net" + src
+            else:
+                continue
 
-            # Upgrade thumbnail size (/75/) to full resolution (/180/)
-            # Only applies to FF.net's /image/<id>/<size>/ CDN pattern.
-            if cover_url and re.search(r"/image/\d+/\d+/$", cover_url):
+            # Skip generic placeholders (d_60_90.jpg, nocover, etc.)
+            if re.search(r"d_60_90|nocover|default-cover|placeholder", cover_url, re.I):
+                cover_url = None
+                continue
+
+            # If we got data-original, it's already full-size — use it directly
+            if cimg.get("data-original"):
+                logger.info(f"[parse] Cover URL from data-original: {cover_url}")
+                break
+
+            # If we got src with a thumbnail pattern, upgrade to full size
+            if re.search(r"/image/\d+/\d+/$", cover_url):
                 original = cover_url
                 cover_url = re.sub(r"/\d+/$", "/180/", cover_url)
-                if DEBUG:
-                    logger.debug(
-                        f"[parse] Cover URL upgraded: {original} → {cover_url}"
-                    )
-                else:
-                    logger.info(f"[parse] Cover URL upgraded to full size: {cover_url}")
-            elif cover_url:
-                if DEBUG:
-                    logger.debug(
-                        f"[parse] Cover URL kept as-is (no thumbnail pattern): {cover_url}"
-                    )
+                logger.info(f"[parse] Cover URL upgraded: {original} -> {cover_url}")
+                break
 
-            if not cover_url:
-                logger.warning(
-                    f"[parse] img.cimage found but cover_url is empty after "
-                    f"normalisation (src='{src}')"
-                )
-        else:
+        if not cover_url:
             if DEBUG:
-                logger.debug("[parse] No img.cimage element found — no cover")
+                logger.debug("[parse] No valid cover image found")
 
         syn = profile.select_one("div.xcontrast_txt") if profile else None
         synopsis = self._text(syn)
@@ -160,17 +164,18 @@ class FanFictionAdapter(BaseAdapter):
             if rating_tag:
                 stats["rating"] = rating_tag.get_text(strip=True).split()[-1]
 
-            rated_prefix = re.sub(r"^Rated:.*?-\s*", "", raw, count=1).strip()
+            # Strip the "Rated: Fiction X -" prefix to get to the language.
+            # Format: "Rated: Fiction <rating> - <language> - <genres> - ..."
+            # The rating text can contain spaces (e.g. "Fiction M", "Fiction T")
+            rated_prefix = re.sub(r"^Rated:\s*Fiction\s+\w+\s*-\s*", "", raw, count=1).strip()
             segments = [s.strip() for s in rated_prefix.split(" - ") if s.strip()]
 
-            if (
-                segments
-                and re.match(r"^[A-Za-z][\w ]*$", segments[0])
-                and ":" not in segments[0]
-            ):
+            # First segment after rating should be the language (e.g. "English")
+            if segments and re.match(r"^[A-Za-z][\w ]*$", segments[0]) and ":" not in segments[0]:
                 language = segments[0]
                 segments = segments[1:]
 
+            # Next segments are genres until we hit character names or stats
             genre_segments = []
             for seg in segments:
                 if re.search(
@@ -179,7 +184,11 @@ class FanFictionAdapter(BaseAdapter):
                     re.I,
                 ):
                     break
-                if re.match(r"^[A-Z][\w/& ]+$", seg) and "." not in seg:
+                # Character name lists like "[OC, Kira N., Jadzia D.]" — skip
+                if seg.startswith("[") and seg.endswith("]"):
+                    break
+                # Genres: allow hyphens (e.g. "Sci-Fi"), slashes, ampersands
+                if re.match(r"^[A-Z][\w/& -]+$", seg) and "." not in seg:
                     genre_segments.append(seg)
                 else:
                     break
@@ -200,13 +209,21 @@ class FanFictionAdapter(BaseAdapter):
         chapters = []
         chap_select = soup.select_one("select#chap_select")
         if chap_select:
-            for opt in chap_select.select("option"):
+            for opt in chap_select.find_all("option"):
                 idx = int(opt["value"])
+                # FFN's HTML has unclosed <option> tags, causing BS4 to nest
+                # them. .string returns None when there are child elements, so
+                # we use .contents[0] to get just the first text node.
+                first = opt.contents[0] if opt.contents else None
+                if first and hasattr(first, 'strip'):
+                    ch_title = first.strip()
+                else:
+                    ch_title = f"Chapter {idx}"
                 chapters.append(
                     {
                         "id": idx,
                         "order": idx - 1,
-                        "title": opt.get_text(strip=True),
+                        "title": ch_title,
                         "url": f"https://www.fanfiction.net/s/{story_id}/{idx}/",
                         "published": None,
                     }

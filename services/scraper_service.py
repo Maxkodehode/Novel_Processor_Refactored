@@ -560,7 +560,33 @@ class ScraperService:
                         if response.status_code != 200:
                             raise Exception(f"HTTP {response.status_code}")
 
-                        soup = BeautifulSoup(response.text, "html.parser")
+                        html_text = response.text
+
+                        # Detect Cloudflare challenge pages — they return 200 but
+                        # contain a JS challenge instead of actual content.
+                        if "Just a moment" in html_text or (
+                            "cloudflare" in html_text.lower()
+                            and "storytext" not in html_text
+                        ):
+                            logger.info(
+                                f"[fetch_chapters] Cloudflare challenge for '{title}', "
+                                f"falling back to Playwright..."
+                            )
+                            try:
+                                html_text, _ = self.browser.get_page_content(
+                                    url,
+                                    keep_page_open=False,
+                                    wait_until="domcontentloaded",
+                                    timeout=TIMEOUT,
+                                )
+                            except Exception as browser_err:
+                                logger.warning(
+                                    f"[fetch_chapters] Playwright fallback failed "
+                                    f"for '{title}': {browser_err}"
+                                )
+                                raise
+
+                        soup = BeautifulSoup(html_text, "html.parser")
                         content_data = adapter.parse_chapter_content(soup)
 
                         if not content_data or "plain_text" not in content_data:
