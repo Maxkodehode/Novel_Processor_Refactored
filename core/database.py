@@ -1,5 +1,7 @@
 import sqlite3
 import logging
+import re
+from urllib.parse import urlparse
 from .config import DB_PATH
 
 logger = logging.getLogger(__name__)
@@ -65,17 +67,42 @@ class NovelRepository:
     def __init__(self, db_manager: DatabaseManager):
         self.db = db_manager
 
+    def _normalize_url(self, url: str) -> str:
+        """
+        Extracts the stable base URL by stripping the slug portion.
+        E.g. 'https://www.royalroad.com/fiction/117146/arcane-chef-book-1-stubbing-mid-may'
+        → 'https://www.royalroad.com/fiction/117146'
+        E.g. 'https://www.scribblehub.com/series/12345/some-title'
+        → 'https://www.scribblehub.com/series/12345'
+        E.g. 'https://www.fanfiction.net/s/12345/1/some-title'
+        → 'https://www.fanfiction.net/s/12345'
+        """
+        if not url:
+            return ""
+        try:
+            parsed = urlparse(url)
+            path = parsed.path.rstrip('/')
+            # Match patterns like /fiction/12345/slug, /series/12345/slug, /s/12345/1/slug
+            m = re.match(r'^(.+?/\d+)(?:/[^/]+)*$', path)
+            if m:
+                return f"{parsed.scheme}://{parsed.netloc}{m.group(1)}"
+        except Exception:
+            pass
+        return url
+
     def upsert_novel(self, data: dict, slug: str) -> int | None:
         """
         Inserts or updates a novel row. Does NOT overwrite status — so an
         ABANDONED novel that gets re-scraped stays ABANDONED.
 
-        Deduplication strategy:
-          1. If source_url already exists in the DB → update that row (title may
-             have changed due to author rebranding/stubbing).
-          2. If title already exists but URL is different → update the existing
-             row (same novel, different URL variant).
-          3. Otherwise → insert new row.
+        Deduplication strategy (in order):
+          1. Exact URL match — same source_url already in DB
+          2. Normalized URL base match — same fiction/series ID, different slug
+             (handles Royal Road / ScribbleHub title changes where the slug
+             in the URL changes but the fiction ID stays the same)
+          3. Same author + fuzzy title (≥80%) — catches cases where both URL
+             and title changed (e.g. cross-platform or full rebrand)
+          4. Fuzzy title only (≥90%) — last resort, may catch minor renames
 
         Parameters:
             data (dict): Parsed novel data.
@@ -85,43 +112,60 @@ class NovelRepository:
             int | None: The novel's DB id, or None on failure.
 
         Called by: ScraperService.populate_novel()
-        Depends on: DatabaseManager.execute()
+        Depends on: DatabaseManager.execute(), rapidfuzz
         """
+        from rapidfuzz import fuzz, utils
+
         url = data.get("url")
         title = data["title"]
+        author = data.get("author", "")
 
-        # Tier 1: Match by URL (stable identifier — survives title changes)
+        # Tier 1: Exact URL match
         if url:
             rows = self.db.execute("SELECT id FROM novels WHERE source_url = ?", (url,))
             if rows:
                 novel_id = rows[0][0]
-                self.db.execute(
-                    """UPDATE novels
-                       SET title = ?, author = ?, synopsis = ?, slug = ?,
-                           language = ?, cover_url = ?, last_updated = CURRENT_TIMESTAMP
-                       WHERE id = ?""",
-                    (title, data.get("author"), data.get("synopsis"), slug,
-                     data.get("language", "en"), data.get("cover_url"), novel_id),
-                    commit=True,
-                )
+                self._update_novel_row(novel_id, data, slug)
                 return novel_id
 
-        # Tier 2: Match by exact title (fallback for URLs that changed)
-        rows = self.db.execute("SELECT id FROM novels WHERE title = ?", (title,))
-        if rows:
-            novel_id = rows[0][0]
-            self.db.execute(
-                """UPDATE novels
-                   SET author = ?, synopsis = ?, source_url = ?, slug = ?,
-                       language = ?, cover_url = ?, last_updated = CURRENT_TIMESTAMP
-                   WHERE id = ?""",
-                (data.get("author"), data.get("synopsis"), url, slug,
-                 data.get("language", "en"), data.get("cover_url"), novel_id),
-                commit=True,
-            )
-            return novel_id
+        # Tier 2: Normalized URL base match (same fiction ID, different slug)
+        if url:
+            base_url = self._normalize_url(url)
+            if base_url and base_url != url:
+                # Look for any existing novel whose source_url shares the same base
+                rows = self.db.execute("SELECT id, source_url FROM novels WHERE source_url LIKE ?", (base_url + '%',))
+                if rows:
+                    novel_id = rows[0][0]
+                    logger.info(f"Normalized URL match: '{url}' → existing base '{rows[0][1]}' (ID {novel_id})")
+                    self._update_novel_row(novel_id, data, slug)
+                    return novel_id
 
-        # Tier 3: New novel — insert
+        # Tier 3: Same author + fuzzy title (≥80%)
+        if author:
+            norm_title = utils.default_process(title)
+            rows = self.db.execute("SELECT id, title FROM novels WHERE author = ?", (author,))
+            for row in rows:
+                existing_title = row[1]
+                if existing_title:
+                    score = fuzz.ratio(norm_title, utils.default_process(existing_title))
+                    if score >= 80:
+                        logger.info(f"Author+title match ({score}%): '{title}' → '{existing_title}' (ID {row[0]})")
+                        self._update_novel_row(row[0], data, slug)
+                        return row[0]
+
+        # Tier 4: Fuzzy title only (≥90%)
+        norm_title = utils.default_process(title)
+        rows = self.db.execute("SELECT id, title FROM novels")
+        for row in rows:
+            existing_title = row[1]
+            if existing_title:
+                score = fuzz.ratio(norm_title, utils.default_process(existing_title))
+                if score >= 90:
+                    logger.info(f"Fuzzy title match ({score}%): '{title}' → '{existing_title}' (ID {row[0]})")
+                    self._update_novel_row(row[0], data, slug)
+                    return row[0]
+
+        # Tier 5: New novel — insert
         query = """
                 INSERT INTO novels (title, author, synopsis, source_url, slug, language, cover_url)
                 VALUES (?, ?, ?, ?, ?, ?, ?)
@@ -143,6 +187,21 @@ class NovelRepository:
         except sqlite3.Error as e:
             logger.error(f"Failed to insert novel '{title}': {e}")
             return None
+
+        return None
+
+    def _update_novel_row(self, novel_id: int, data: dict, slug: str):
+        """Update an existing novel row with new scraped data."""
+        self.db.execute(
+            """UPDATE novels
+               SET title = ?, author = ?, synopsis = ?, source_url = ?, slug = ?,
+                   language = ?, cover_url = ?, last_updated = CURRENT_TIMESTAMP
+               WHERE id = ?""",
+            (data["title"], data.get("author"), data.get("synopsis"),
+             data.get("url"), slug, data.get("language", "en"),
+             data.get("cover_url"), novel_id),
+            commit=True,
+        )
 
         return None
 
