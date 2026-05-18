@@ -16,6 +16,9 @@ Usage:
 
     # Queue multiple novels at once
     python main.py --urls URL1 URL2 URL3 [--no-fetch]
+
+    # Re-scrape even if URL already exists
+    python main.py --url https://www.royalroad.com/fiction/12345/some-novel --force
 """
 
 import argparse
@@ -46,6 +49,11 @@ def main():
         "--debug",
         action="store_true",
         help="Save raw HTML (page.html) and parsed JSON (output.json) for inspection",
+    )
+    parser.add_argument(
+        "--force",
+        action="store_true",
+        help="Re-scrape even if the URL is already in the database",
     )
     parser.add_argument(
         "--use-local",
@@ -109,7 +117,12 @@ def main():
                     json.dump(data, f, ensure_ascii=False, indent=2)
                 logger.info(f"Debug JSON saved to {debug_file}")
 
-            # ── Step 4: Populate DB ────────────────────────────────────────────
+            # ── Step 4: Check for duplicates ────────────────────────────────────
+            if not args.force and repository.is_url_known(url):
+                logger.warning(f"URL already in database: {url} — skipping. Use --force to re-scrape.")
+                continue
+
+            # ── Step 5: Populate DB ────────────────────────────────────────────
             logger.info("Inserting metadata into database...")
             novel_id = scraper.populate_novel(data)
 
@@ -117,7 +130,7 @@ def main():
                 logger.error(f"DB populate failed for {url} — skipping.")
                 continue
 
-            # ── Step 5: Fetch chapter content ──────────────────────────────────
+            # ── Step 6: Fetch chapter content ──────────────────────────────────
             if args.no_fetch:
                 logger.info("--no-fetch set: skipping chapter content fetching.")
             else:
