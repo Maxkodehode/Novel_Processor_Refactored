@@ -10,7 +10,7 @@ A comprehensive, modular, service-oriented novel scraper, manager, and reader sy
   - [Scribble Hub](https://www.scribblehub.com/) — chapter lists fetched via direct AJAX POST to `admin-ajax.php` (no Playwright needed). Falls back to static HTML parsing if AJAX fails. Chapter URLs are refreshed before fetch to handle ScribbleHub slug changes.
   - [FanFiction.net](https://www.fanfiction.net/) — uses Playwright with stealth to bypass Cloudflare bot protection. Fast `curl_cffi` fetch is attempted first as a fallback.
 - **Mass Discovery Pipeline**: Crawl site-wide ranking lists and automatically hydrate your library with novel metadata and full chapter lists.
-- **Cross-Platform Deduplication**: Two-tier deduplication — exact URL matching and intelligent fuzzy title matching (95% similarity) — to avoid inserting the same novel twice across platforms.
+- **Cross-Platform Deduplication**: Five-tier deduplication — (1) exact URL match, (2) normalized URL base match (strips slug to compare fiction/series ID, handles Royal Road title changes), (3) same author + fuzzy title ≥80% (catches cross-platform/rebrand), (4) fuzzy title ≥90% (minor renames), (5) insert new — to avoid inserting the same novel twice across platforms.
 - **Stubbed Novel Detection**: During sync, if a novel's source page returns zero chapters but the local database has chapters, the novel is recognised as stubbed/sold and local content is preserved. If neither the source nor the database has chapters, the novel is marked `ABANDONED` and excluded from all future processing.
 - **Advanced Sync Service**: Cron-ready script to keep your library up-to-date with the latest chapters. Skips novels updated within the last 7 days to reduce unnecessary requests.
 - **Database Maintenance Tools**: Standalone scripts to backfill missing chapter URLs, download missing chapter content, and audit and repair cover images across your entire library.
@@ -175,6 +175,35 @@ python backfill_chapter_urls.py --id 42
 
 # Mark novels as ABANDONED when the source returns 0 chapters and DB also has 0
 python backfill_chapter_urls.py --abandon
+```
+
+**Clean up duplicate chapter rows** caused by ScribbleHub URL slug changes:
+
+```bash
+# Preview what would be cleaned up
+python dedup_chapter_urls.py --dry-run
+
+# Clean up all duplicates library-wide
+python dedup_chapter_urls.py
+
+# Clean up a single novel by its database ID
+python dedup_chapter_urls.py --id 42
+```
+
+**Refresh chapter URLs** for ScribbleHub novels whose slugs have changed:
+
+```bash
+# Refresh all ScribbleHub novels
+python refresh_chapter_urls.py
+
+# Refresh a single novel by its database ID
+python refresh_chapter_urls.py --id 42
+
+# Preview changes without writing
+python refresh_chapter_urls.py --dry-run
+
+# Also delete DB chapters that no longer exist on the source
+python refresh_chapter_urls.py --remove-stale
 ```
 
 **Download missing chapter content** for chapters that have a URL but no text yet:
