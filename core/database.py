@@ -70,6 +70,13 @@ class NovelRepository:
         Inserts or updates a novel row. Does NOT overwrite status — so an
         ABANDONED novel that gets re-scraped stays ABANDONED.
 
+        Deduplication strategy:
+          1. If source_url already exists in the DB → update that row (title may
+             have changed due to author rebranding/stubbing).
+          2. If title already exists but URL is different → update the existing
+             row (same novel, different URL variant).
+          3. Otherwise → insert new row.
+
         Parameters:
             data (dict): Parsed novel data.
             slug (str): URL-safe slug for the novel.
@@ -80,24 +87,51 @@ class NovelRepository:
         Called by: ScraperService.populate_novel()
         Depends on: DatabaseManager.execute()
         """
+        url = data.get("url")
+        title = data["title"]
+
+        # Tier 1: Match by URL (stable identifier — survives title changes)
+        if url:
+            rows = self.db.execute("SELECT id FROM novels WHERE source_url = ?", (url,))
+            if rows:
+                novel_id = rows[0][0]
+                self.db.execute(
+                    """UPDATE novels
+                       SET title = ?, author = ?, synopsis = ?, slug = ?,
+                           language = ?, cover_url = ?, last_updated = CURRENT_TIMESTAMP
+                       WHERE id = ?""",
+                    (title, data.get("author"), data.get("synopsis"), slug,
+                     data.get("language", "en"), data.get("cover_url"), novel_id),
+                    commit=True,
+                )
+                return novel_id
+
+        # Tier 2: Match by exact title (fallback for URLs that changed)
+        rows = self.db.execute("SELECT id FROM novels WHERE title = ?", (title,))
+        if rows:
+            novel_id = rows[0][0]
+            self.db.execute(
+                """UPDATE novels
+                   SET author = ?, synopsis = ?, source_url = ?, slug = ?,
+                       language = ?, cover_url = ?, last_updated = CURRENT_TIMESTAMP
+                   WHERE id = ?""",
+                (data.get("author"), data.get("synopsis"), url, slug,
+                 data.get("language", "en"), data.get("cover_url"), novel_id),
+                commit=True,
+            )
+            return novel_id
+
+        # Tier 3: New novel — insert
         query = """
                 INSERT INTO novels (title, author, synopsis, source_url, slug, language, cover_url)
                 VALUES (?, ?, ?, ?, ?, ?, ?)
-                ON CONFLICT(title) DO UPDATE SET
-                                                 author       = excluded.author,
-                                                 synopsis     = excluded.synopsis,
-                                                 source_url   = excluded.source_url,
-                                                 slug         = excluded.slug,
-                                                 language     = excluded.language,
-                                                 last_updated = CURRENT_TIMESTAMP,
-                                                 cover_url    = excluded.cover_url
-                RETURNING id \
+                RETURNING id
                 """
         params = (
-            data["title"],
+            title,
             data.get("author"),
             data.get("synopsis"),
-            data.get("url"),
+            url,
             slug,
             data.get("language", "en"),
             data.get("cover_url"),
@@ -107,16 +141,10 @@ class NovelRepository:
             if rows:
                 return rows[0][0]
         except sqlite3.Error as e:
-            logger.warning(f"RETURNING clause failed, trying fallback: {e}")
-
-        try:
-            rows = self.db.execute(
-                "SELECT id FROM novels WHERE title = ?", (data["title"],)
-            )
-            return rows[0][0] if rows else None
-        except Exception as e:
-            logger.error(f"Failed to upsert novel (fallback): {e}")
+            logger.error(f"Failed to insert novel '{title}': {e}")
             return None
+
+        return None
 
     def upsert_chapters(self, novel_id: int, chapters: list[dict]):
         """

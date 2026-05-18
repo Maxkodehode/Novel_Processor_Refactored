@@ -211,6 +211,9 @@ class FanFictionAdapter(BaseAdapter):
         if chap_select:
             for opt in chap_select.find_all("option"):
                 idx = int(opt["value"])
+                # FFN's HTML has unclosed <option> tags, causing BS4 to nest
+                # them. .string returns None when there are child elements, so
+                # we use .contents[0] to get just the first text node.
                 first = opt.contents[0] if opt.contents else None
                 if first and hasattr(first, 'strip'):
                     ch_title = first.strip()
